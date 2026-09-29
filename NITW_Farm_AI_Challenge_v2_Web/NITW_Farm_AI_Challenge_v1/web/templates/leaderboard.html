@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="page">
+    <h1>🏆 Leaderboard</h1>
+
+    {% if leaderboard %}
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Rank</th>
+                    <th>Team</th>
+                    <th>Score</th>
+                    <th>Status</th>
+                    <th>Runtime</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for row in leaderboard %}
+                <tr>
+                    <td>
+                        {% if row.rank == 1 %}🥇
+                        {% elif row.rank == 2 %}🥈
+                        {% elif row.rank == 3 %}🥉
+                        {% else %}{{ row.rank }}
+                        {% endif %}
+                    </td>
+                    <td>{{ row.team }}</td>
+                    <td><strong>{{ row.score }}</strong></td>
+                    <td>{{ row.status }}</td>
+                    <td>{{ "%.2f"|format(row.runtime_seconds) }}s</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty">No results yet.</div>
+    {% endif %}
+</section>
+{% endblock %}

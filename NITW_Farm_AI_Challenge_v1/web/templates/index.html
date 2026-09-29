@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="hero">
+    <p class="eyebrow">NIT WARANGAL · AI/ML CLUB</p>
+    <h1>🌾 Farm AI Challenge</h1>
+    <p class="lead">
+        Build an AI agent that makes the most money in a
+        Kaggriculture-style farming simulation.
+    </p>
+
+    <div class="actions">
+        <a class="button" href="/submit">Submit Agent</a>
+        <a class="button secondary" href="/leaderboard">View Leaderboard</a>
+    </div>
+</section>
+
+<section>
+    <h2>🏆 Leaderboard</h2>
+
+    {% if leaderboard %}
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Rank</th>
+                    <th>Team</th>
+                    <th>Score</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for row in leaderboard %}
+                <tr>
+                    <td>
+                        {% if row.rank == 1 %}🥇
+                        {% elif row.rank == 2 %}🥈
+                        {% elif row.rank == 3 %}🥉
+                        {% else %}{{ row.rank }}
+                        {% endif %}
+                    </td>
+                    <td>{{ row.team }}</td>
+                    <td>{{ row.score }}</td>
+                    <td>{{ row.status }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+        <div class="empty">No evaluated submissions yet.</div>
+    {% endif %}
+</section>
+
+<section class="rules">
+    <h2>How it works</h2>
+    <div class="cards">
+        <div class="card">
+            <strong>1. Build</strong>
+            <p>Write your <code>agent(obs)</code> strategy.</p>
+        </div>
+        <div class="card">
+            <strong>2. Submit</strong>
+            <p>Upload your <code>main.py</code>.</p>
+        </div>
+        <div class="card">
+            <strong>3. Simulate</strong>
+            <p>Your agent plays 720 turns against the starter agent.</p>
+        </div>
+        <div class="card">
+            <strong>4. Win</strong>
+            <p>The highest final reward takes the top spot.</p>
+        </div>
+    </div>
+</section>
+{% endblock %}

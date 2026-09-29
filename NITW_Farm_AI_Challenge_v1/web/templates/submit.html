@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="page">
+    <h1>Submit your agent</h1>
+
+    {% if error %}
+    <div class="error">
+        {{ error }}
+    </div>
+    {% endif %}
+
+    <form method="post" action="/submit" enctype="multipart/form-data">
+        <label for="team">Team name</label>
+        <input id="team" name="team" required maxlength="40"
+               placeholder="Team Alpha">
+
+        <label for="file">main.py</label>
+        <input id="file" name="file" type="file"
+               accept=".py" required>
+
+        <p class="hint">
+            Upload exactly one Python file named <strong>main.py</strong>.
+        </p>
+
+        <button class="button" type="submit">
+            Submit
+        </button>
+    </form>
+
+    <div class="notice">
+        <strong>Important:</strong>
+        Uploading stores the submission. Official evaluation is performed
+        separately inside the competition Docker sandbox.
+    </div>
+</section>
+{% endblock %}

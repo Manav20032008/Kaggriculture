@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="page">
+    <h1>Submit your agent 🚀</h1>
+
+    {% if error %}
+    <div class="error">{{ error }}</div>
+    {% endif %}
+
+    <form method="post" action="/submit" enctype="multipart/form-data">
+        <label for="team">Team name</label>
+        <input id="team" name="team" required maxlength="40"
+               placeholder="Team Alpha">
+
+        <label for="file">Agent file</label>
+        <input id="file" name="file" type="file"
+               accept=".py" required>
+
+        <p class="hint">
+            Upload exactly one file named <strong>main.py</strong>.
+            Maximum size: 100 KB.
+        </p>
+
+        <button class="button" type="submit">
+            Submit & Evaluate
+        </button>
+    </form>
+
+    <div class="notice">
+        <strong>What happens next?</strong>
+        Your code is validated, copied into an isolated Docker evaluation,
+        run for 720 turns against the fixed starter opponent, and the final
+        reward is recorded on the leaderboard.
+    </div>
+</section>
+{% endblock %}

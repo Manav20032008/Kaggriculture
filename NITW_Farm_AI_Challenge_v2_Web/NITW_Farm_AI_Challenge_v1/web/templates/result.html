@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="page">
+    {% if result.status == "success" %}
+        <p class="eyebrow">EVALUATION COMPLETE</p>
+        <h1>🌾 {{ result.team }}</h1>
+
+        <div class="result-card">
+            <div class="score">{{ result.score }}</div>
+            <div class="score-label">Final Score</div>
+
+            <div class="result-grid">
+                <div>
+                    <span>Status</span>
+                    <strong>✅ {{ result.status }}</strong>
+                </div>
+                <div>
+                    <span>Runtime</span>
+                    <strong>{{ "%.2f"|format(result.runtime_seconds) }}s</strong>
+                </div>
+                <div>
+                    <span>Turns</span>
+                    <strong>720</strong>
+                </div>
+                <div>
+                    <span>Opponent</span>
+                    <strong>Starter</strong>
+                </div>
+            </div>
+        </div>
+    {% else %}
+        <p class="eyebrow">EVALUATION FAILED</p>
+        <h1>Submission could not be evaluated</h1>
+
+        <div class="error">
+            {{ result.error or "Unknown evaluation error." }}
+        </div>
+    {% endif %}
+
+    <div class="actions">
+        <a class="button" href="/leaderboard">View Leaderboard</a>
+        <a class="button secondary" href="/submit">Submit Another Agent</a>
+    </div>
+</section>
+{% endblock %}
