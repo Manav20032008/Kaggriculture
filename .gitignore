@@ -1,6 +1,5 @@
-__pycache__/
-*.pyc
-py_env/
-py_env.py
-.env
-.DS_Store
+   __pycache__/
+   *.pyc
+   py_env/
+   .env
+   .DS_Store
