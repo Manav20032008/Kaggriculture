@@ -170,7 +170,7 @@ def load_registered_players():
         players/
         ├── ansh/
         │   └── agent.py
-        ├── diksha/
+        ├── manav/
         │   └── agent.py
         ├── saksham/
         │   └── agent.py
