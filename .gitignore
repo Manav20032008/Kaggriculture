@@ -3,4 +3,7 @@ __pycache__/
 py_env/
 py_env.py
 .env
-.DS_Store
+.DS_Store**/.venv/ 
+**/.venv/
+__pycache__/
+*.pyc
