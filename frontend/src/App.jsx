@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
-import arenaImage from "./assets/cropforge-arena.png";
-import brandMark from "./assets/cropforge-mark.png";
+import arenaImage from "./assets/neural-coliseum-arena.png";
+import brandMark from "./assets/neural-coliseum-mark.png";
 
 const API_BASE = "http://127.0.0.1:8000";
 const EMPTY_STATE = {
@@ -37,6 +37,7 @@ function DuelCard({ match, featured = false }) {
     <div className={`combatant ${p1Won ? "winner" : ""} ${completed && !p1Won ? "defeated" : ""}`}><i>A</i><strong>{p1}</strong><span>{score(match?.p1Score)}</span></div>
     <div className="versus-line"><span>VS</span></div>
     <div className={`combatant amber ${p2Won ? "winner" : ""} ${completed && !p2Won ? "defeated" : ""}`}><i>B</i><strong>{p2}</strong><span>{score(match?.p2Score)}</span></div>
+    {completed && match?.winner && <div className="winner-verdict"><span>WINNER</span><strong>{match.winner}</strong><small>ADVANCES TO THE NEXT ROUND</small></div>}
     {match?.tieReplays > 0 && <p className="replay-note">Overtime replay × {match.tieReplays}</p>}
   </article>;
 }
@@ -62,6 +63,9 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [demoOpen, setDemoOpen] = useState(false);
   const [tick, setTick] = useState(0);
+  const [battleResult, setBattleResult] = useState(null);
+  const seenResults = useRef(new Set());
+  const resultTimer = useRef(null);
   const isRegistration = tournament.status === "registration";
   const isActive = ["starting", "round_running", "next_round", "final"].includes(tournament.status);
   const isChampion = tournament.status === "champion";
@@ -78,6 +82,20 @@ function App() {
   useEffect(() => { refresh(); }, []);
   useEffect(() => { const timer = setInterval(refresh, isActive ? 1000 : 3000); return () => clearInterval(timer); }, [isActive]);
   useEffect(() => { if (!isActive) return undefined; const timer = setInterval(() => setTick((value) => value + 1), 1450); return () => clearInterval(timer); }, [isActive]);
+  useEffect(() => {
+    const completed = [...(tournament.allMatches || []), ...(tournament.currentMatches || [])]
+      .filter((match) => match.status === "completed" && match.winner);
+    const unseen = completed.filter((match, index) => {
+      const key = match.id || `${match.player1}-${match.player2}-${match.winner}-${index}`;
+      return !seenResults.current.has(key);
+    });
+    completed.forEach((match, index) => seenResults.current.add(match.id || `${match.player1}-${match.player2}-${match.winner}-${index}`));
+    if (!unseen.length) return;
+    setBattleResult(unseen[unseen.length - 1]);
+    clearTimeout(resultTimer.current);
+    resultTimer.current = setTimeout(() => setBattleResult(null), 4500);
+  }, [tournament.allMatches, tournament.currentMatches]);
+  useEffect(() => () => clearTimeout(resultTimer.current), []);
 
   const rounds = useMemo(() => {
     const list = (tournament.roundsHistory || []).map((round) => ({ ...round, completed: true }));
@@ -109,7 +127,7 @@ function App() {
 
   return <div className="app-shell">
     <header className="topbar">
-      <a className="brand" href="#top" aria-label="CropForge Arena home"><img src={brandMark} alt="CropForge crest" /><span><b>CROPFORGE</b><small>BOT BATTLE ARENA</small></span></a>
+      <a className="brand" href="#top" aria-label="Neural Coliseum home"><img src={brandMark} alt="Neural Coliseum crest" /><span><b>NEURAL COLISEUM</b><small>MACHINE LEARNING BATTLE ARENA</small></span></a>
       <StatusLight status={tournament.status} />
       <div className="top-actions">
         {isRegistration ? <>
@@ -124,8 +142,8 @@ function App() {
 
     {isRegistration ? <main id="top">
       <section className="hero" style={{ "--arena-image": `url(${arenaImage})` }}><div className="hero-grid" /><div className="hero-copy">
-        <span className="eyebrow">NIT WARANGAL · AI / ML CLUB</span><h1>Code the farm.<br /><span>Conquer the field.</span></h1>
-        <p>Autonomous farming agents enter a single-elimination arena. Every seed, move, and market order decides who advances.</p>
+        <span className="eyebrow">NIT WARANGAL · AI / ML CLUB</span><h1>Train the mind.<br /><span>Conquer the field.</span></h1>
+        <p>Machine learning agents enter a single-elimination simulation arena. Every inference, action, and market decision determines who advances.</p>
         <div className="hero-metrics"><div><b>{String(players.length).padStart(2, "0")}</b><span>bots armed</span></div><div><b>720</b><span>turns per duel</span></div><div><b>1V1</b><span>zero second chances</span></div></div>
       </div><div className="hero-stamp"><span>SEASON</span><b>01</b><small>LIVE BUILD</small></div></section>
 
@@ -153,7 +171,10 @@ function App() {
         {tab === "roster" && <div className="standings-grid"><div className="standing-panel"><div className="panel-label">STILL STANDING</div>{survivors.map((name, index) => <div className="standing-row" key={playerName(name)}><span>{index + 1}</span><b>{playerName(name)}</b><i>ACTIVE</i></div>)}</div><div className="standing-panel dim"><div className="panel-label">ELIMINATED</div>{(tournament.eliminatedPlayers || []).map((entry, index) => <div className="standing-row" key={`${playerName(entry)}-${index}`}><span>×</span><b>{playerName(entry.player || entry)}</b><i>OUT</i></div>)}</div><div className="standing-panel"><div className="panel-label">BYE PASSES</div>{(tournament.byes || []).map((entry, index) => <div className="standing-row" key={`${entry.player}-${index}`}><span>R{entry.round}</span><b>{entry.player}</b><i>PASS</i></div>)}</div></div>}
       </section>
     </main>}
-    <footer><span>CROPFORGE ARENA</span><span>NIT WARANGAL · AI/ML CLUB</span><span>BUILD 01.26</span></footer>
+    {battleResult && <div className="result-reveal" onClick={() => setBattleResult(null)} role="status">
+      <div className="result-shockwave" /><div className="result-content"><span>BATTLE COMPLETE</span><img src={brandMark} alt="" /><small>WINNER</small><h2>{battleResult.winner}</h2><div className="result-score"><b>{battleResult.player1}</b><strong>{score(battleResult.p1Score)} <i>—</i> {score(battleResult.p2Score)}</strong><b>{battleResult.player2}</b></div><p>ADVANCES TO THE NEXT ROUND</p></div>
+    </div>}
+    <footer><span>NEURAL COLISEUM</span><span>NIT WARANGAL · AI/ML CLUB</span><span>BUILD 02.26</span></footer>
   </div>;
 }
 
