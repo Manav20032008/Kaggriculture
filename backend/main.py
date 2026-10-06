@@ -10,7 +10,7 @@ from typing import Optional
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse, Response
 
 # Fix Windows console charmap / emoji encoding issues
 if sys.stdout and hasattr(sys.stdout, "reconfigure"):
@@ -226,6 +226,11 @@ def home():
         "engineReady": bool(get_kaggle_python()),
         "status": tournament_state["status"],
     }
+
+
+@app.head("/")
+def health_head():
+    return Response(status_code=200)
 
 
 @app.get("/players")
