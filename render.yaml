@@ -19,6 +19,8 @@ services:
     envVars:
       - key: VITE_API_BASE
         value: https://neural-coliseum-api.onrender.com
+      - key: PYTHON_VERSION
+        value: 3.11.11
     routes:
       - type: rewrite
         source: /*
