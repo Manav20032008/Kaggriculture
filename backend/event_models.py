@@ -1,0 +1,124 @@
+TOTAL_ROUNDS = 3
+
+REGISTRATION = "REGISTRATION"
+FINAL_RESULTS = "FINAL_RESULTS"
+
+ROUND_1_SUBMISSION_OPEN = "ROUND_1_SUBMISSION_OPEN"
+ROUND_1_SUBMISSION_LOCKED = "ROUND_1_SUBMISSION_LOCKED"
+ROUND_1_EVALUATING = "ROUND_1_EVALUATING"
+ROUND_1_PROCESSING_RESULTS = "ROUND_1_PROCESSING_RESULTS"
+ROUND_1_COMPLETE = "ROUND_1_COMPLETE"
+
+ROUND_2_SUBMISSION_OPEN = "ROUND_2_SUBMISSION_OPEN"
+ROUND_2_SUBMISSION_LOCKED = "ROUND_2_SUBMISSION_LOCKED"
+ROUND_2_EVALUATING = "ROUND_2_EVALUATING"
+ROUND_2_PROCESSING_RESULTS = "ROUND_2_PROCESSING_RESULTS"
+ROUND_2_COMPLETE = "ROUND_2_COMPLETE"
+
+ROUND_3_SUBMISSION_OPEN = "ROUND_3_SUBMISSION_OPEN"
+ROUND_3_SUBMISSION_LOCKED = "ROUND_3_SUBMISSION_LOCKED"
+ROUND_3_EVALUATING = "ROUND_3_EVALUATING"
+ROUND_3_PROCESSING_RESULTS = "ROUND_3_PROCESSING_RESULTS"
+ROUND_3_COMPLETE = "ROUND_3_COMPLETE"
+
+ALL_STATES = (
+    REGISTRATION,
+    ROUND_1_SUBMISSION_OPEN,
+    ROUND_1_SUBMISSION_LOCKED,
+    ROUND_1_EVALUATING,
+    ROUND_1_PROCESSING_RESULTS,
+    ROUND_1_COMPLETE,
+    ROUND_2_SUBMISSION_OPEN,
+    ROUND_2_SUBMISSION_LOCKED,
+    ROUND_2_EVALUATING,
+    ROUND_2_PROCESSING_RESULTS,
+    ROUND_2_COMPLETE,
+    ROUND_3_SUBMISSION_OPEN,
+    ROUND_3_SUBMISSION_LOCKED,
+    ROUND_3_EVALUATING,
+    ROUND_3_PROCESSING_RESULTS,
+    ROUND_3_COMPLETE,
+    FINAL_RESULTS,
+)
+
+PARTICIPANT_ACTIVE = "active"
+
+SUBMISSION_VALID = "valid"
+SUBMISSION_INVALID = "invalid"
+
+SCORE_MISSING = "MISSING_SUBMISSION"
+SCORE_PENDING = "PENDING"
+SCORE_RECORDED = "RECORDED"
+
+EVAL_SUCCESS = "SUCCESS"
+EVAL_PLAYER_ERROR = "PLAYER_ERROR"
+EVAL_TIMEOUT = "TIMEOUT"
+EVAL_SYSTEM_ERROR = "SYSTEM_ERROR"
+
+
+def round_state(round_number: int, phase: str) -> str:
+    if round_number < 1 or round_number > TOTAL_ROUNDS:
+        raise ValueError(f"Round number must be 1..{TOTAL_ROUNDS}.")
+    mapping = {
+        "SUBMISSION_OPEN": {
+            1: ROUND_1_SUBMISSION_OPEN,
+            2: ROUND_2_SUBMISSION_OPEN,
+            3: ROUND_3_SUBMISSION_OPEN,
+        },
+        "SUBMISSION_LOCKED": {
+            1: ROUND_1_SUBMISSION_LOCKED,
+            2: ROUND_2_SUBMISSION_LOCKED,
+            3: ROUND_3_SUBMISSION_LOCKED,
+        },
+        "EVALUATING": {
+            1: ROUND_1_EVALUATING,
+            2: ROUND_2_EVALUATING,
+            3: ROUND_3_EVALUATING,
+        },
+        "PROCESSING_RESULTS": {
+            1: ROUND_1_PROCESSING_RESULTS,
+            2: ROUND_2_PROCESSING_RESULTS,
+            3: ROUND_3_PROCESSING_RESULTS,
+        },
+        "COMPLETE": {
+            1: ROUND_1_COMPLETE,
+            2: ROUND_2_COMPLETE,
+            3: ROUND_3_COMPLETE,
+        },
+    }
+    if phase not in mapping:
+        raise ValueError(f"Unknown phase: {phase}")
+    return mapping[phase][round_number]
+
+
+def parse_round_from_state(status: str) -> int | None:
+    if status.startswith("ROUND_1_"):
+        return 1
+    if status.startswith("ROUND_2_"):
+        return 2
+    if status.startswith("ROUND_3_"):
+        return 3
+    return None
+
+
+def is_submission_open(status: str) -> bool:
+    return status in {
+        ROUND_1_SUBMISSION_OPEN,
+        ROUND_2_SUBMISSION_OPEN,
+        ROUND_3_SUBMISSION_OPEN,
+    }
+
+
+def is_evaluating(status: str) -> bool:
+    return status in {
+        ROUND_1_EVALUATING,
+        ROUND_1_PROCESSING_RESULTS,
+        ROUND_2_EVALUATING,
+        ROUND_2_PROCESSING_RESULTS,
+        ROUND_3_EVALUATING,
+        ROUND_3_PROCESSING_RESULTS,
+    }
+
+
+def registration_allowed(status: str) -> bool:
+    return status == REGISTRATION

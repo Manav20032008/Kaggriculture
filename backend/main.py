@@ -3,7 +3,6 @@ from pathlib import Path
 import shutil
 import re
 import threading
-import ast
 import math
 import json
 from typing import Optional
@@ -27,12 +26,17 @@ if sys.stderr and hasattr(sys.stderr, "reconfigure"):
 # PROJECT PATHS
 # ============================================================
 
-ROOT = Path(__file__).resolve().parent.parent
+BACKEND_DIR = Path(__file__).resolve().parent
+ROOT = BACKEND_DIR.parent
 
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from py_env import get_kaggle_python
+from agent_validation import validate_agent_source
+from event_api import router as event_router, get_store
 
 PLAYERS_DIR = ROOT / "players"
 PLAYERS_DIR.mkdir(exist_ok=True)
@@ -61,12 +65,13 @@ app.add_middleware(
         "http://127.0.0.1:5173",
         "http://localhost:3000",
         "http://127.0.0.1:3000",
-        "*"
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(event_router)
 
 
 # ============================================================
@@ -103,52 +108,6 @@ def create_initial_state():
 tournament_state = create_initial_state()
 state_lock = threading.Lock()
 tournament_exec_lock = threading.Lock()
-
-
-# ============================================================
-# AGENT CODE VALIDATOR
-# ============================================================
-
-def validate_agent_source(source_text: str):
-    """
-    Validate agent code safely before saving:
-    1. File size <= 100 KB
-    2. Valid Python syntax (AST parsing)
-    3. Defines agent(obs) function
-    4. Prohibits blocking calls or malicious OS operations
-    """
-    if len(source_text.encode("utf-8")) > 100_000:
-        raise ValueError("Agent file exceeds 100 KB limit.")
-
-    try:
-        tree = ast.parse(source_text)
-    except SyntaxError as e:
-        raise ValueError(f"Python syntax error on line {e.lineno}: {e.msg}")
-
-    # Check for agent function
-    has_agent_func = any(
-        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "agent"
-        for node in tree.body
-    )
-    if not has_agent_func:
-        raise ValueError("Agent must define an 'agent(obs)' function.")
-
-    # Check for forbidden patterns that break automated evaluation
-    forbidden = [
-        "plt.show",
-        "matplotlib",
-        "os.system",
-        "subprocess",
-        "socket",
-        "requests.get",
-        "requests.post",
-        "urllib.request",
-        "input(",
-    ]
-    lowered = source_text.lower()
-    for pattern in forbidden:
-        if pattern in lowered:
-            raise ValueError(f"Agent contains forbidden pattern: '{pattern}'. Agents must be non-blocking and isolated.")
 
 
 # ============================================================
@@ -256,9 +215,9 @@ def handle_tournament_progress(event: str, data: dict):
 def home():
     python_path = get_kaggle_python()
     return {
-        "message": "Kaggriculture Tournament Backend Running",
+        "message": "Kaggriculture three-round event backend running",
         "pythonInterpreter": python_path,
-        "status": tournament_state["status"],
+        "status": get_store().get_state()["status"],
     }
 
 
@@ -292,6 +251,7 @@ async def register_player(
     username: str = Form(...),
     agent: UploadFile = File(...),
 ):
+    raise HTTPException(status_code=410, detail="Legacy knockout registration is retired. Use /event/register and /event/submissions.")
     with state_lock:
         if tournament_state["status"] not in ("registration", "finished", "champion", "error"):
             raise HTTPException(
@@ -364,6 +324,7 @@ async def register_player(
 @app.post("/players/clear")
 def clear_players():
     """Clear all registered players (allowed only when no tournament is running)."""
+    raise HTTPException(status_code=410, detail="Legacy player reset is disabled for the official event.")
     with state_lock:
         if tournament_state["status"] in ("starting", "round_running", "next_round", "final"):
             raise HTTPException(status_code=403, detail="Cannot clear players while tournament is active.")
@@ -383,6 +344,7 @@ def populate_sample_players(count: int = Query(default=4, ge=2, le=60)):
     """
     Demo utility to populate sample agents with varied strategies for testing.
     """
+    raise HTTPException(status_code=410, detail="Public demo population is disabled for the official event.")
     with state_lock:
         if tournament_state["status"] in ("starting", "round_running", "next_round", "final"):
             raise HTTPException(status_code=403, detail="Cannot populate players while tournament is running.")
@@ -476,6 +438,7 @@ def run_tournament_background():
 
 @app.post("/start-tournament")
 def start_tournament(background_tasks: BackgroundTasks):
+    raise HTTPException(status_code=410, detail="The knockout tournament is retired. Use the protected /event/admin workflow.")
     acquired = tournament_exec_lock.acquire(blocking=False)
     if not acquired:
         raise HTTPException(
@@ -542,6 +505,7 @@ def get_tournament_status():
 
 @app.post("/tournament/reset")
 def reset_tournament():
+    raise HTTPException(status_code=410, detail="Public tournament reset is disabled for the official event.")
     with state_lock:
         if tournament_state["status"] in ("starting", "round_running", "next_round", "final"):
             raise HTTPException(status_code=403, detail="Cannot reset while tournament is actively running.")

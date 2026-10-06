@@ -222,9 +222,18 @@ def _run_docker(submission: Path, seed: int) -> dict:
         # Docker process itself failed
         # -----------------------------------------------------
         if completed.returncode != 0:
+            output = completed.stdout.strip()
+            if output:
+                try:
+                    payload = json.loads(output.splitlines()[-1])
+                    if isinstance(payload, dict) and payload.get("error_type"):
+                        return payload
+                except json.JSONDecodeError:
+                    pass
             return {
                 "status": "failed",
                 "reward": 0,
+                "error_type": "SYSTEM_ERROR",
                 "error": (
                     completed.stderr.strip()
                     or completed.stdout.strip()
@@ -241,6 +250,7 @@ def _run_docker(submission: Path, seed: int) -> dict:
             return {
                 "status": "failed",
                 "reward": 0,
+                "error_type": "SYSTEM_ERROR",
                 "error": "Evaluator worker returned empty output.",
             }
 
@@ -251,6 +261,7 @@ def _run_docker(submission: Path, seed: int) -> dict:
             return {
                 "status": "failed",
                 "reward": 0,
+                "error_type": "SYSTEM_ERROR",
                 "error": (
                     "Worker returned invalid JSON.\n\n"
                     f"JSON error: {exc}\n\n"
