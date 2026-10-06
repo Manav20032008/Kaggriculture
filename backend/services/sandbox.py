@@ -87,6 +87,13 @@ def run_sandbox_source(source: str, opponent: str, seed: int, *, trusted_local: 
             payload = (_run_local if trusted_local else _run_docker)(agent_path, BENCHMARKS[opponent], seed, replay_path)
     except subprocess.TimeoutExpired as exc:
         raise SandboxError(f"Sandbox match exceeded {MATCH_TIMEOUT_SECONDS} seconds.") from exc
+    except FileNotFoundError as exc:
+        runner = "local Python" if trusted_local else "Docker"
+        raise SandboxError(
+            f"Match runner unavailable: {runner} could not be started."
+        ) from exc
+    except OSError as exc:
+        raise SandboxError(f"Match runner could not start: {exc}") from exc
     runtime = time.perf_counter() - started
     p1 = float(payload["p1Score"])
     p2 = float(payload["p2Score"])
