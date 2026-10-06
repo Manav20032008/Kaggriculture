@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { STRATEGY_MISSIONS, missionUnlocked } from "./strategyMissions.js";
+import GuidePage from "./GuidePage.jsx";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8000";
 
@@ -21,7 +22,6 @@ export default function ContestantPortal({ section, onNavigate }) {
   const [opponents, setOpponents] = useState([]);
   const [opponent, setOpponent] = useState("starter_crop");
   const [seed, setSeed] = useState("20260929");
-  const [guide, setGuide] = useState("");
   const [analytics, setAnalytics] = useState(null);
   const [leaderboard, setLeaderboard] = useState(null);
   const [message, setMessage] = useState(null);
@@ -35,7 +35,6 @@ export default function ContestantPortal({ section, onNavigate }) {
 
   useEffect(() => { if (team) loadSummary(team); }, [team]);
   useEffect(() => { api("/sandbox/opponents").then((data) => setOpponents(data.opponents || [])).catch(() => {}); }, []);
-  useEffect(() => { if (section === "guide" && !guide) fetch(`${API_BASE}/guide`).then((response) => response.text()).then(setGuide); }, [section, guide]);
   useEffect(() => {
     const replayId = summary?.lastTest?.replay_id;
     if (replayId && ["lab", "sandbox", "analytics"].includes(section)) api(`/replays/${replayId}/analytics`).then(setAnalytics).catch((error) => setMessage({ type: "error", text: error.message }));
@@ -89,7 +88,7 @@ export default function ContestantPortal({ section, onNavigate }) {
   const detected = summary?.capabilities?.filter((item) => item.detected) || [];
   const nextInsight = analytics?.diagnostics?.[0];
 
-  if (section === "guide") return <main className="portal-page"><PageHead code="08" title="Contestant guide" copy="Learn the game, shape a strategy, and use an LLM without cloning everyone else's bot." /><article className="guide-document"><pre>{guide || "Loading guide…"}</pre></article></main>;
+  if (section === "guide") return <GuidePage onNavigate={onNavigate} />;
   if (section === "leaderboard") return <main className="portal-page"><PageHead code="06" title="Leaderboard" copy="Official ratings combine hidden opponents, multiple seeds, and both starting positions." /><Leaderboard data={leaderboard} message={message} setMessage={setMessage} /></main>;
   if (section === "strategy") return <StrategyPath summary={summary} onNavigate={onNavigate} />;
 
