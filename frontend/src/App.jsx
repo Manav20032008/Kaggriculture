@@ -2,8 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 import arenaImage from "./assets/neural-coliseum-arena.png";
 import brandMark from "./assets/neural-coliseum-mark.png";
+import ContestantPortal from "./Lab.jsx";
 
-const API_BASE = "http://127.0.0.1:8000";
+const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8000";
 const EMPTY_STATE = {
   status: "registration", message: "Registration is open.", playersCount: 0,
   maxPlayers: 60, registeredPlayers: [], currentRound: 0, totalRoundsEstimate: 0,
@@ -64,6 +65,7 @@ function App() {
   const [demoOpen, setDemoOpen] = useState(false);
   const [tick, setTick] = useState(0);
   const [battleResult, setBattleResult] = useState(null);
+  const [view, setView] = useState("lab");
   const seenResults = useRef(new Set());
   const resultTimer = useRef(null);
   const isRegistration = tournament.status === "registration";
@@ -130,17 +132,20 @@ function App() {
       <a className="brand" href="#top" aria-label="Neural Coliseum home"><img src={brandMark} alt="Neural Coliseum crest" /><span><b>NEURAL COLISEUM</b><small>MACHINE LEARNING BATTLE ARENA</small></span></a>
       <StatusLight status={tournament.status} />
       <div className="top-actions">
-        {isRegistration ? <>
+        {view === "tournament" && (isRegistration ? <>
           <div className="demo-wrap"><button className="button ghost" onClick={() => setDemoOpen(!demoOpen)}>Demo roster</button>{demoOpen && <div className="demo-menu">
             {[4, 8, 16].map((count) => <button key={count} onClick={() => { setDemoOpen(false); post(`/demo/populate-sample-players?count=${count}`); }}>{count} bots</button>)}
             <button className="danger" onClick={() => { setDemoOpen(false); post("/players/clear"); }}>Clear roster</button>
           </div>}</div>
           <button className="button primary" disabled={busy || players.length < 2} onClick={() => post("/start-tournament", "arena")}>Launch tournament</button>
-        </> : <button className="button ghost" disabled={busy || isActive} onClick={() => post("/tournament/reset", "arena")}>Reset arena</button>}
+        </> : <button className="button ghost" disabled={busy || isActive} onClick={() => post("/tournament/reset", "arena")}>Reset arena</button>)}
       </div>
     </header>
+    <nav className="product-nav">
+      {["lab", "sandbox", "analytics", "submissions", "leaderboard", "tournament", "guide"].map((item) => <button className={view === item ? "active" : ""} onClick={() => setView(item)} key={item}>{item === "lab" ? "Bot Lab" : item}</button>)}
+    </nav>
 
-    {isRegistration ? <main id="top">
+    {view !== "tournament" ? <ContestantPortal section={view} onNavigate={setView} /> : isRegistration ? <main id="top">
       <section className="hero" style={{ "--arena-image": `url(${arenaImage})` }}><div className="hero-grid" /><div className="hero-copy">
         <span className="eyebrow">NIT WARANGAL · AI / ML CLUB</span><h1>Train the mind.<br /><span>Conquer the field.</span></h1>
         <p>Machine learning agents enter a single-elimination simulation arena. Every inference, action, and market decision determines who advances.</p>
@@ -171,7 +176,7 @@ function App() {
         {tab === "roster" && <div className="standings-grid"><div className="standing-panel"><div className="panel-label">STILL STANDING</div>{survivors.map((name, index) => <div className="standing-row" key={playerName(name)}><span>{index + 1}</span><b>{playerName(name)}</b><i>ACTIVE</i></div>)}</div><div className="standing-panel dim"><div className="panel-label">ELIMINATED</div>{(tournament.eliminatedPlayers || []).map((entry, index) => <div className="standing-row" key={`${playerName(entry)}-${index}`}><span>×</span><b>{playerName(entry.player || entry)}</b><i>OUT</i></div>)}</div><div className="standing-panel"><div className="panel-label">BYE PASSES</div>{(tournament.byes || []).map((entry, index) => <div className="standing-row" key={`${entry.player}-${index}`}><span>R{entry.round}</span><b>{entry.player}</b><i>PASS</i></div>)}</div></div>}
       </section>
     </main>}
-    {battleResult && <div className="result-reveal" onClick={() => setBattleResult(null)} role="status">
+    {view === "tournament" && battleResult && <div className="result-reveal" onClick={() => setBattleResult(null)} role="status">
       <div className="result-shockwave" /><div className="result-content"><span>BATTLE COMPLETE</span><img src={brandMark} alt="" /><small>WINNER</small><h2>{battleResult.winner}</h2><div className="result-score"><b>{battleResult.player1}</b><strong>{score(battleResult.p1Score)} <i>—</i> {score(battleResult.p2Score)}</strong><b>{battleResult.player2}</b></div><p>ADVANCES TO THE NEXT ROUND</p></div>
     </div>}
     <footer><span>NEURAL COLISEUM</span><span>NIT WARANGAL · AI/ML CLUB</span><span>BUILD 02.26</span></footer>

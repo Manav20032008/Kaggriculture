@@ -1,15 +1,16 @@
+import os
 import sys
 from pathlib import Path
 import shutil
 import re
 import threading
-import ast
 import math
 import json
 from typing import Optional
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, PlainTextResponse
 
 # Fix Windows console charmap / emoji encoding issues
 if sys.stdout and hasattr(sys.stdout, "reconfigure"):
@@ -33,12 +34,22 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from py_env import get_kaggle_python
+from backend.services.validator import AgentValidationError, inspect_agent_source, validate_agent_source
+from backend.services.sandbox import REPLAY_DIR, SandboxError, list_benchmarks, run_sandbox_source
+from backend.services.analytics import analyze_replay, replay_frame
+from backend.services.storage import store
+from backend.services.evaluation import EvaluationError, evaluate_source
+from backend.services.scoring import load_scoring_config
 
 PLAYERS_DIR = ROOT / "players"
 PLAYERS_DIR.mkdir(exist_ok=True)
 
 EXAMPLES_DIR = ROOT / "NITW_Farm_AI_Challenge_v1" / "examples"
 STARTER_DIR = ROOT / "NITW_Farm_AI_Participant_Starter"
+CONTESTANT_STARTER = ROOT / "contestant_starter" / "agent.py"
+CONTESTANT_GUIDE = ROOT / "docs" / "CONTESTANT_GUIDE.md"
+SUBMISSION_HISTORY_DIR = ROOT / "submissions"
+SUBMISSION_HISTORY_DIR.mkdir(exist_ok=True)
 
 
 # ============================================================
@@ -103,52 +114,7 @@ def create_initial_state():
 tournament_state = create_initial_state()
 state_lock = threading.Lock()
 tournament_exec_lock = threading.Lock()
-
-
-# ============================================================
-# AGENT CODE VALIDATOR
-# ============================================================
-
-def validate_agent_source(source_text: str):
-    """
-    Validate agent code safely before saving:
-    1. File size <= 100 KB
-    2. Valid Python syntax (AST parsing)
-    3. Defines agent(obs) function
-    4. Prohibits blocking calls or malicious OS operations
-    """
-    if len(source_text.encode("utf-8")) > 100_000:
-        raise ValueError("Agent file exceeds 100 KB limit.")
-
-    try:
-        tree = ast.parse(source_text)
-    except SyntaxError as e:
-        raise ValueError(f"Python syntax error on line {e.lineno}: {e.msg}")
-
-    # Check for agent function
-    has_agent_func = any(
-        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "agent"
-        for node in tree.body
-    )
-    if not has_agent_func:
-        raise ValueError("Agent must define an 'agent(obs)' function.")
-
-    # Check for forbidden patterns that break automated evaluation
-    forbidden = [
-        "plt.show",
-        "matplotlib",
-        "os.system",
-        "subprocess",
-        "socket",
-        "requests.get",
-        "requests.post",
-        "urllib.request",
-        "input(",
-    ]
-    lowered = source_text.lower()
-    for pattern in forbidden:
-        if pattern in lowered:
-            raise ValueError(f"Agent contains forbidden pattern: '{pattern}'. Agents must be non-blocking and isolated.")
+selected_qualifiers = None
 
 
 # ============================================================
@@ -287,6 +253,206 @@ def get_players():
     }
 
 
+@app.get("/starter/download")
+def download_starter():
+    if not CONTESTANT_STARTER.is_file():
+        raise HTTPException(status_code=404, detail="Contestant starter is unavailable.")
+    return FileResponse(CONTESTANT_STARTER, media_type="text/x-python", filename="agent.py")
+
+
+@app.get("/guide", response_class=PlainTextResponse)
+def contestant_guide():
+    if not CONTESTANT_GUIDE.is_file():
+        raise HTTPException(status_code=404, detail="Contestant guide is unavailable.")
+    return CONTESTANT_GUIDE.read_text(encoding="utf-8")
+
+
+@app.post("/validate")
+async def validate_agent(agent: UploadFile = File(...)):
+    if agent.filename != "agent.py":
+        raise HTTPException(status_code=400, detail="Upload one file named exactly agent.py.")
+    try:
+        source_text = (await agent.read()).decode("utf-8")
+        report = validate_agent_source(source_text)
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="Agent file must be valid UTF-8 text.")
+    except AgentValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return report.to_dict()
+
+
+@app.get("/sandbox/opponents")
+def sandbox_opponents():
+    return {"opponents": list_benchmarks()}
+
+
+@app.post("/sandbox/run")
+async def run_sandbox(
+    agent: UploadFile = File(...),
+    opponent: str = Form("starter_crop"),
+    seed: int = Form(20260929),
+):
+    if agent.filename != "agent.py":
+        raise HTTPException(status_code=400, detail="Upload one file named exactly agent.py.")
+    try:
+        source_text = (await agent.read()).decode("utf-8")
+        report = validate_agent_source(source_text)
+        result = run_sandbox_source(
+            source_text,
+            opponent,
+            seed,
+            trusted_local=os.environ.get("KAGGRICULTURE_TRUSTED_LOCAL") == "1",
+        )
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="Agent file must be valid UTF-8 text.")
+    except AgentValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except SandboxError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    result["validationWarnings"] = report.warnings
+    return result
+
+
+def _clean_username(username: str) -> str:
+    username = username.strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", username):
+        raise HTTPException(status_code=400, detail="Team name can contain only letters, numbers, '_' and '-'.")
+    return username
+
+
+@app.get("/botlab/{username}")
+def botlab_summary(username: str):
+    username = _clean_username(username)
+    return {**store.summary(username), "submissions": store.list_submissions(username)}
+
+
+@app.post("/botlab/upload")
+async def botlab_upload(username: str = Form(...), agent: UploadFile = File(...)):
+    username = _clean_username(username)
+    if agent.filename != "agent.py":
+        raise HTTPException(status_code=400, detail="Upload one file named exactly agent.py.")
+    try:
+        source = (await agent.read()).decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="Agent file must be valid UTF-8 text.")
+    report = inspect_agent_source(source)
+    version = len(store.list_submissions(username)) + 1
+    destination = SUBMISSION_HISTORY_DIR / username / f"v{version}" / "agent.py"
+    destination.parent.mkdir(parents=True, exist_ok=False)
+    destination.write_text(source, encoding="utf-8")
+    submission = store.create_submission(
+        username, destination, valid=report.valid,
+        errors="\n".join(report.errors) if report.errors else None,
+    )
+    return {"submission": submission, "validation": report.to_dict()}
+
+
+@app.post("/botlab/{username}/validate")
+def botlab_validate(username: str):
+    username = _clean_username(username)
+    submission = store.current_submission(username)
+    if not submission:
+        raise HTTPException(status_code=404, detail="Upload a bot version first.")
+    source = Path(submission["file_path"]).read_text(encoding="utf-8")
+    return inspect_agent_source(source).to_dict()
+
+
+@app.post("/botlab/{username}/sandbox")
+def botlab_sandbox(username: str, opponent: str = Form("starter_crop"), seed: int = Form(20260929)):
+    username = _clean_username(username)
+    submission = store.current_submission(username)
+    if not submission:
+        raise HTTPException(status_code=404, detail="Upload a bot version first.")
+    if submission["validation_status"] != "valid":
+        raise HTTPException(status_code=400, detail=submission["validation_errors"] or "Current version is invalid.")
+    source = Path(submission["file_path"]).read_text(encoding="utf-8")
+    try:
+        result = run_sandbox_source(
+            source, opponent, seed,
+            trusted_local=os.environ.get("KAGGRICULTURE_TRUSTED_LOCAL") == "1",
+        )
+    except SandboxError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    store.record_sandbox(submission["id"], result)
+    return result
+
+
+@app.post("/botlab/{username}/submit")
+def botlab_submit(username: str):
+    username = _clean_username(username)
+    submission = store.current_submission(username)
+    if not submission:
+        raise HTTPException(status_code=404, detail="Upload a bot version first.")
+    if submission["validation_status"] != "valid":
+        raise HTTPException(status_code=400, detail="Only a valid version can be submitted.")
+    source = Path(submission["file_path"]).read_text(encoding="utf-8")
+    try:
+        evaluation = evaluate_source(
+            source,
+            trusted_local=os.environ.get("KAGGRICULTURE_TRUSTED_LOCAL") == "1",
+        )
+    except EvaluationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    player_dir = PLAYERS_DIR / username
+    player_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(submission["file_path"], player_dir / "agent.py")
+    active = store.activate_submission(username, submission["id"])
+    active = store.record_evaluation(submission["id"], evaluation)
+    get_players()
+    return {
+        "success": True, "submission": active, "evaluation": evaluation,
+        "message": f"v{submission['version']} scored {evaluation['rating']} and is now the active tournament bot.",
+    }
+
+
+@app.get("/leaderboard")
+def leaderboard():
+    config = load_scoring_config()
+    return {
+        "entries": store.leaderboard(),
+        "qualifierCount": int(config.get("qualifier_count", 16)),
+        "evaluationGames": len(config["seeds"]) * len(config["opponents"]) * len(config.get("sides", [0, 1])),
+        "sideSwapped": set(config.get("sides", [])) == {0, 1},
+    }
+
+
+@app.post("/tournament/load-qualifiers")
+def load_qualifiers():
+    global selected_qualifiers
+    with state_lock:
+        if tournament_state["status"] in ("starting", "round_running", "next_round", "final"):
+            raise HTTPException(status_code=403, detail="Cannot change qualifiers while tournament is active.")
+    config = load_scoring_config()
+    entries = store.leaderboard()[: int(config.get("qualifier_count", 16))]
+    if len(entries) < 2:
+        raise HTTPException(status_code=400, detail="At least two evaluated teams are required.")
+    selected_qualifiers = [entry["team"] for entry in entries]
+    with state_lock:
+        tournament_state["registeredPlayers"] = list(selected_qualifiers)
+        tournament_state["playersCount"] = len(selected_qualifiers)
+        tournament_state["message"] = f"Top {len(selected_qualifiers)} leaderboard qualifiers loaded."
+    return {"success": True, "qualifiers": selected_qualifiers}
+
+
+def _replay_path(replay_id: str) -> Path:
+    if not re.fullmatch(r"[a-f0-9]{32}", replay_id):
+        raise HTTPException(status_code=400, detail="Invalid replay identifier.")
+    path = REPLAY_DIR / f"{replay_id}.json"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Replay not found.")
+    return path
+
+
+@app.get("/replays/{replay_id}/analytics")
+def replay_analytics(replay_id: str):
+    return analyze_replay(_replay_path(replay_id))
+
+
+@app.get("/replays/{replay_id}/frame/{step}")
+def get_replay_frame(replay_id: str, step: int):
+    return replay_frame(_replay_path(replay_id), step)
+
+
 @app.post("/register")
 async def register_player(
     username: str = Form(...),
@@ -312,8 +478,8 @@ async def register_player(
     if not agent.filename:
         raise HTTPException(status_code=400, detail="No agent file uploaded.")
 
-    if not agent.filename.lower().endswith(".py"):
-        raise HTTPException(status_code=400, detail="Agent must be a .py file.")
+    if agent.filename != "agent.py":
+        raise HTTPException(status_code=400, detail="Upload one file named exactly agent.py.")
 
     current_players = sum(
         1 for p in PLAYERS_DIR.iterdir()
@@ -333,7 +499,7 @@ async def register_player(
         validate_agent_source(source_text)
     except UnicodeDecodeError:
         raise HTTPException(status_code=400, detail="Agent file must be valid UTF-8 encoded text.")
-    except ValueError as ve:
+    except AgentValidationError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Validation failed: {e}")
@@ -430,6 +596,9 @@ def run_tournament_background():
         from tournament import run_tournament, load_registered_players
 
         participants = load_registered_players()
+        if selected_qualifiers:
+            qualifier_names = {name.lower() for name in selected_qualifiers}
+            participants = [item for item in participants if item["username"].lower() in qualifier_names]
 
         if len(participants) < 2:
             with state_lock:
@@ -489,7 +658,9 @@ def start_tournament(background_tasks: BackgroundTasks):
             raise HTTPException(status_code=409, detail="Tournament is already active.")
 
         # Validate player count
-        participants = [p.name for p in PLAYERS_DIR.iterdir() if p.is_dir() and (p / "agent.py").exists()]
+        participants = list(selected_qualifiers) if selected_qualifiers else [
+            p.name for p in PLAYERS_DIR.iterdir() if p.is_dir() and (p / "agent.py").exists()
+        ]
         if len(participants) < 2:
             tournament_exec_lock.release()
             raise HTTPException(

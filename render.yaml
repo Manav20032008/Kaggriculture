@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: neural-coliseum-api
+    runtime: python
+    plan: free
+    region: singapore
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.11
+
+  - type: web
+    name: neural-coliseum
+    runtime: static
+    buildCommand: cd frontend && npm ci && npm run build
+    staticPublishPath: frontend/dist
+    envVars:
+      - key: VITE_API_BASE
+        value: https://neural-coliseum-api.onrender.com
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html

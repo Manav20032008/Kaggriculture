@@ -3,6 +3,8 @@ import json
 import argparse
 import os
 import contextlib
+import importlib.util
+import uuid
 from pathlib import Path
 
 
@@ -70,6 +72,20 @@ def resolve_agent_path(path_string):
     return path
 
 
+def load_agent_function(path):
+    """Load the canonical agent callable while keeping each module isolated."""
+    module_name = f"kaggriculture_agent_{uuid.uuid4().hex}"
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Could not load agent module: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    function = getattr(module, "agent", None)
+    if not callable(function):
+        raise RuntimeError("Submission does not expose callable agent(obs).")
+    return function
+
+
 # ============================================================
 # SUPPRESS NATIVE STDOUT / STDERR
 # ============================================================
@@ -126,7 +142,7 @@ def suppress_native_output():
 # RUN ONE MATCH
 # ============================================================
 
-def execute_match(agent1_path, agent2_path, seed):
+def execute_match(agent1_path, agent2_path, seed, replay_output=None):
     """
     Execute one complete Kaggriculture 1v1 match.
 
@@ -163,14 +179,32 @@ def execute_match(agent1_path, agent2_path, seed):
             debug=False,
         )
 
-        # ----------------------------------------------------
-        # Run both agents
-        # ----------------------------------------------------
+        failures = [None, None]
 
-        env.run([
-            str(agent1),
-            str(agent2),
-        ])
+        def prepare(index, path):
+            try:
+                function = load_agent_function(path)
+            except Exception as exc:
+                failures[index] = f"{type(exc).__name__}: {exc}"
+                function = lambda obs: {}
+
+            def guarded(obs):
+                try:
+                    return function(obs)
+                except Exception as exc:
+                    if failures[index] is None:
+                        failures[index] = f"{type(exc).__name__}: {exc}"
+                    return {}
+            return guarded
+
+        # Wrappers expose contestant failures that kaggle_environments otherwise
+        # converts into silent no-op turns.
+        env.run([prepare(0, agent1), prepare(1, agent2)])
+
+        if replay_output:
+            replay_path = Path(replay_output).resolve()
+            replay_path.parent.mkdir(parents=True, exist_ok=True)
+            replay_path.write_text(json.dumps(env.toJSON()), encoding="utf-8")
 
         # ----------------------------------------------------
         # Verify steps
@@ -194,6 +228,8 @@ def execute_match(agent1_path, agent2_path, seed):
 
         p1_state = final_step[0]
         p2_state = final_step[1]
+        p1_status = str(getattr(p1_state, "status", "UNKNOWN"))
+        p2_status = str(getattr(p2_state, "status", "UNKNOWN"))
 
         # ----------------------------------------------------
         # Extract final rewards
@@ -210,6 +246,22 @@ def execute_match(agent1_path, agent2_path, seed):
             "reward",
             None
         )
+
+        p1_failed = failures[0] is not None or p1_status == "ERROR"
+        p2_failed = failures[1] is not None or p2_status == "ERROR"
+
+        if p1_failed and not p2_failed:
+            return {"p1Score": 0.0, "p2Score": float(p2_reward or 0), "winner": 1,
+                    "tie": False, "p1Status": p1_status, "p2Status": p2_status,
+                    "failure": {"type": "contestant", "player": 0, "error": failures[0] or p1_status}}
+
+        if p2_failed and not p1_failed:
+            return {"p1Score": float(p1_reward or 0), "p2Score": 0.0, "winner": 0,
+                    "tie": False, "p1Status": p1_status, "p2Status": p2_status,
+                    "failure": {"type": "contestant", "player": 1, "error": failures[1] or p2_status}}
+
+        if p1_failed and p2_failed:
+            raise RuntimeError("Both contestants failed; the match requires organizer review.")
 
         if p1_reward is None:
             raise RuntimeError(
@@ -255,6 +307,8 @@ def execute_match(agent1_path, agent2_path, seed):
             "p2Score": p2_score,
             "winner": winner,
             "tie": tie,
+            "p1Status": p1_status,
+            "p2Status": p2_status,
         }
 
 # ============================================================
@@ -286,6 +340,11 @@ def main():
         help="Kaggriculture random seed"
     )
 
+    parser.add_argument(
+        "--replay-output",
+        help="Optional JSON path for development replay capture"
+    )
+
     args = parser.parse_args()
 
     try:
@@ -294,6 +353,7 @@ def main():
             args.agent1,
             args.agent2,
             args.seed,
+            args.replay_output,
         )
 
         # ====================================================
