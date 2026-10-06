@@ -1,1 +1,1 @@
-"""Kaggriculture platform tests."""
+"""Neural Coliseum platform tests."""

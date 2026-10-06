@@ -9,7 +9,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_DB = ROOT / "data" / "kaggriculture.db"
+DEFAULT_DB = ROOT / "data" / "neural_coliseum.db"
 
 
 def utc_now() -> str:
@@ -196,11 +196,22 @@ class PlatformStore:
             """).fetchall()
             return [{"rank": index + 1, **dict(row)} for index, row in enumerate(rows)]
 
+    def sandbox_count(self, username: str) -> int:
+        with self.session() as db:
+            row = db.execute("""SELECT COUNT(*) AS total FROM sandbox_runs r
+                JOIN submissions s ON s.id = r.submission_id JOIN teams t ON t.id = s.team_id
+                WHERE t.username = ?""", (username,)).fetchone()
+            return int(row["total"])
+
+    def leaderboard_entry(self, username: str) -> dict | None:
+        return next((entry for entry in self.leaderboard() if entry["team"].lower() == username.lower()), None)
+
     def summary(self, username: str) -> dict:
         submissions = self.list_submissions(username)
         current = submissions[0] if submissions else None
         active = next((item for item in submissions if item["is_active"]), None)
         scored = [item["sandbox_score"] for item in submissions if item["sandbox_score"] is not None]
+        leaderboard_entry = self.leaderboard_entry(username)
         return {
             "team": username,
             "currentSubmission": current,
@@ -210,6 +221,9 @@ class PlatformStore:
             "lastTest": self.last_sandbox(current["id"]) if current else None,
             "bestScore": max(scored) if scored else None,
             "submissionCount": len(submissions),
+            "sandboxRunCount": self.sandbox_count(username),
+            "leaderboardRank": leaderboard_entry["rank"] if leaderboard_entry else None,
+            "winRate": leaderboard_entry["win_rate"] if leaderboard_entry else None,
         }
 
 

@@ -1,4 +1,4 @@
-"""Resolve the Python interpreter used to run Kaggriculture matches.
+"""Resolve the Python interpreter used to run Harvest Protocol matches.
 
 This module is intentionally tracked because the backend, tournament runner,
 and command-line utilities all import it on a clean checkout.
@@ -12,7 +12,7 @@ import sys
 def get_kaggle_python() -> str:
     """Return an explicit project interpreter or the current Python executable."""
     root = Path(__file__).resolve().parent
-    configured = os.environ.get("KAGGRICULTURE_PYTHON")
+    configured = os.environ.get("NEURAL_COLISEUM_PYTHON")
     candidates = (
         Path(configured).expanduser() if configured else None,
         root / "NITW_Farm_AI_Challenge_v2_Web" / ".venv" / "Scripts" / "python.exe",

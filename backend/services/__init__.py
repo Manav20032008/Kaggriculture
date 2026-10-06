@@ -1,1 +1,1 @@
-"""Shared backend services for the Kaggriculture platform."""
+"""Shared backend services for the Neural Coliseum platform."""

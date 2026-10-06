@@ -1,4 +1,4 @@
-# Kaggriculture Architecture
+# Neural Coliseum Architecture
 
 This document records the repository layout before the contestant platform is
 expanded. It distinguishes the active tournament path from reusable legacy
@@ -15,7 +15,7 @@ components so later phases can be implemented without breaking the game.
 7. Connect leaderboard qualification to the existing live knockout tournament.
 
 All seven phases are now connected. Sandbox and official evaluation use isolated
-Docker execution by default. `KAGGRICULTURE_TRUSTED_LOCAL=1` enables the local
+Docker execution by default. `NEURAL_COLISEUM_TRUSTED_LOCAL=1` enables the local
 subprocess runner only for trusted development.
 
 ## Active live tournament path
@@ -30,7 +30,7 @@ tournament.py
     -> pairs players, handles BYEs and tie replays
     -> starts run_match.py as a local subprocess
 run_match.py
-    -> kaggle_environments.make("kaggriculture")
+    -> kaggle_environments.make(<upstream engine identifier>)
     -> env.run([agent_a, agent_b])
     -> emits one JSON result
 ```
@@ -114,9 +114,21 @@ The active Vite application is `frontend/`. It currently calls:
 - `GET /tournament/status`
 - `POST /tournament/reset`
 
-The Neural Coliseum interface includes Bot Lab, Sandbox, Analytics and replay,
-Submissions, Leaderboard, Tournament, and Guide views alongside the preserved
-live bracket.
+The Neural Coliseum interface includes Bot Lab, Strategy Path, Sandbox,
+Analytics and replay, Submissions, Leaderboard, Tournament, and Guide views
+alongside the preserved live bracket. `frontend/src/strategyMissions.js` holds
+the branching curriculum and copyable prompt missions. Capability badges use
+conservative syntax structure checks plus recorded match behavior; diagnostic
+findings come only from replay telemetry.
+
+## Deployment
+
+`render.yaml` describes the public React static site and FastAPI web service.
+The frontend receives `VITE_API_BASE` at build time. Render's free filesystem is
+ephemeral, so event deployments that need durable submissions, SQLite state,
+and replays must attach persistent storage or migrate the storage service to a
+managed database. Secure contestant execution still requires the isolated
+Docker evaluator; the public web service does not enable trusted local execution.
 
 ## Component status
 

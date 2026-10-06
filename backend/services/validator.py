@@ -1,4 +1,4 @@
-"""Static validation for single-file Kaggriculture agents."""
+"""Static validation for single-file Harvest Protocol agents."""
 
 from __future__ import annotations
 

@@ -74,7 +74,7 @@ def resolve_agent_path(path_string):
 
 def load_agent_function(path):
     """Load the canonical agent callable while keeping each module isolated."""
-    module_name = f"kaggriculture_agent_{uuid.uuid4().hex}"
+    module_name = f"harvest_protocol_agent_{uuid.uuid4().hex}"
     spec = importlib.util.spec_from_file_location(module_name, path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Could not load agent module: {path}")
@@ -144,7 +144,7 @@ def suppress_native_output():
 
 def execute_match(agent1_path, agent2_path, seed, replay_output=None):
     """
-    Execute one complete Kaggriculture 1v1 match.
+    Execute one complete Harvest Protocol 1v1 match.
 
     Returns:
 
@@ -167,7 +167,7 @@ def execute_match(agent1_path, agent2_path, seed, replay_output=None):
         from kaggle_environments import make
 
         # ----------------------------------------------------
-        # Create Kaggriculture environment
+        # Create the Harvest Protocol environment using its upstream engine ID.
         # ----------------------------------------------------
 
         env = make(
@@ -212,7 +212,7 @@ def execute_match(agent1_path, agent2_path, seed, replay_output=None):
 
         if not env.steps:
             raise RuntimeError(
-                "Kaggriculture produced no steps."
+                "Harvest Protocol produced no steps."
             )
 
         final_step = env.steps[-1]
@@ -318,7 +318,7 @@ def execute_match(agent1_path, agent2_path, seed, replay_output=None):
 def main():
 
     parser = argparse.ArgumentParser(
-        description="Run one Kaggriculture 1v1 match."
+        description="Run one Harvest Protocol 1v1 match."
     )
 
     parser.add_argument(
@@ -337,7 +337,7 @@ def main():
         "--seed",
         type=int,
         default=20260929,
-        help="Kaggriculture random seed"
+        help="Harvest Protocol random seed"
     )
 
     parser.add_argument(

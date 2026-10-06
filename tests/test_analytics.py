@@ -31,6 +31,8 @@ class AnalyticsTests(unittest.TestCase):
         self.assertEqual(metrics["plantsHarvested"], 1)
         self.assertEqual(metrics["workersHired"], 1)
         self.assertEqual(metrics["productsSold"], {"WHEAT": 2})
+        self.assertIn("movementRate", metrics)
+        self.assertIn("diagnostics", metrics)
         self.assertEqual(frame["step"], 1)
 
 

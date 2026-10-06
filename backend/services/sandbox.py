@@ -23,6 +23,7 @@ BENCHMARKS = {
     "random": ROOT / "NITW_Farm_AI_Challenge_v1" / "examples" / "random_agent.py",
     "starter_crop": ROOT / "NITW_Farm_AI_Challenge_v1" / "examples" / "starter_agent.py",
     "balanced": ROOT / "benchmarks" / "balanced_agent.py",
+    "trader": ROOT / "benchmarks" / "trader_agent.py",
     "animal": ROOT / "benchmarks" / "animal_agent.py",
 }
 
@@ -32,7 +33,7 @@ class SandboxError(RuntimeError):
 
 
 def list_benchmarks() -> list[dict]:
-    labels = {"random": "Random Bot", "starter_crop": "Starter Crop Bot", "balanced": "Simple Balanced Bot", "animal": "Simple Animal Bot"}
+    labels = {"random": "Random Bot", "starter_crop": "Basic Farmer", "balanced": "Balanced Bot", "trader": "Basic Trader", "animal": "Basic Rancher"}
     return [{"id": key, "name": labels[key]} for key in BENCHMARKS]
 
 
@@ -80,7 +81,7 @@ def run_sandbox_source(source: str, opponent: str, seed: int, *, trusted_local: 
     replay_id = uuid4().hex
     replay_path = REPLAY_DIR / f"{replay_id}.json"
     try:
-        with tempfile.TemporaryDirectory(prefix="kaggriculture-sandbox-") as temp_dir:
+        with tempfile.TemporaryDirectory(prefix="neural-coliseum-sandbox-") as temp_dir:
             agent_path = Path(temp_dir) / "agent.py"
             agent_path.write_text(source, encoding="utf-8")
             payload = (_run_local if trusted_local else _run_docker)(agent_path, BENCHMARKS[opponent], seed, replay_path)

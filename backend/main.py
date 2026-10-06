@@ -40,6 +40,7 @@ from backend.services.analytics import analyze_replay, replay_frame
 from backend.services.storage import store
 from backend.services.evaluation import EvaluationError, evaluate_source
 from backend.services.scoring import load_scoring_config
+from backend.services.capabilities import detect_source_capabilities
 
 PLAYERS_DIR = ROOT / "players"
 PLAYERS_DIR.mkdir(exist_ok=True)
@@ -57,7 +58,7 @@ SUBMISSION_HISTORY_DIR.mkdir(exist_ok=True)
 # ============================================================
 
 app = FastAPI(
-    title="Kaggriculture AI Tournament API"
+    title="Neural Coliseum Tournament API"
 )
 
 
@@ -220,10 +221,9 @@ def handle_tournament_progress(event: str, data: dict):
 
 @app.get("/")
 def home():
-    python_path = get_kaggle_python()
     return {
-        "message": "Kaggriculture Tournament Backend Running",
-        "pythonInterpreter": python_path,
+        "message": "Neural Coliseum Tournament Backend Running",
+        "engineReady": bool(get_kaggle_python()),
         "status": tournament_state["status"],
     }
 
@@ -301,7 +301,7 @@ async def run_sandbox(
             source_text,
             opponent,
             seed,
-            trusted_local=os.environ.get("KAGGRICULTURE_TRUSTED_LOCAL") == "1",
+            trusted_local=os.environ.get("NEURAL_COLISEUM_TRUSTED_LOCAL") == "1",
         )
     except UnicodeDecodeError:
         raise HTTPException(status_code=400, detail="Agent file must be valid UTF-8 text.")
@@ -323,7 +323,12 @@ def _clean_username(username: str) -> str:
 @app.get("/botlab/{username}")
 def botlab_summary(username: str):
     username = _clean_username(username)
-    return {**store.summary(username), "submissions": store.list_submissions(username)}
+    summary = store.summary(username)
+    current = summary.get("currentSubmission")
+    capabilities = []
+    if current and Path(current["file_path"]).is_file():
+        capabilities = detect_source_capabilities(Path(current["file_path"]).read_text(encoding="utf-8"))
+    return {**summary, "capabilities": capabilities, "submissions": store.list_submissions(username)}
 
 
 @app.post("/botlab/upload")
@@ -369,7 +374,7 @@ def botlab_sandbox(username: str, opponent: str = Form("starter_crop"), seed: in
     try:
         result = run_sandbox_source(
             source, opponent, seed,
-            trusted_local=os.environ.get("KAGGRICULTURE_TRUSTED_LOCAL") == "1",
+            trusted_local=os.environ.get("NEURAL_COLISEUM_TRUSTED_LOCAL") == "1",
         )
     except SandboxError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
@@ -389,7 +394,7 @@ def botlab_submit(username: str):
     try:
         evaluation = evaluate_source(
             source,
-            trusted_local=os.environ.get("KAGGRICULTURE_TRUSTED_LOCAL") == "1",
+            trusted_local=os.environ.get("NEURAL_COLISEUM_TRUSTED_LOCAL") == "1",
         )
     except EvaluationError as exc:
         raise HTTPException(status_code=503, detail=str(exc))

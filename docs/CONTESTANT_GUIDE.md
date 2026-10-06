@@ -1,15 +1,27 @@
 # Neural Coliseum Contestant Guide
 
-## What is Kaggriculture?
+## What is Harvest Protocol?
 
-Kaggriculture is a two-player farming economy simulation. Your Python agent
+Harvest Protocol is a two-player farming economy simulation. Your Python agent
 receives the current game observation once per turn and returns actions for its
 farmer, hired hands, and market orders. The season lasts 720 turns. The player
 with the most banked money at the end wins.
 
+The event is presented by **SDC (AI/ML Wing), NIT Warangal** through the
+**Neural Coliseum** platform.
+
 The challenge is intentionally LLM-assisted. You receive working infrastructure
 for reading the state and assigning basic work. Your job is to design and tune a
 strategy. Different choices should lead to genuinely different bots.
+
+## Strategy Path and prompt missions
+
+The Strategy Path introduces one concept at a time. A mission explains the
+problem, gives a small field hint, and provides a focused prompt you can take to
+an LLM. Missions branch into market, workforce, livestock, capital, trading,
+opponent awareness, and endgame topics. Arena tests unlock deeper lessons and
+produce evidence-based diagnostics. Compare results across public seeds and
+keep changes you can explain.
 
 ## How a match works
 

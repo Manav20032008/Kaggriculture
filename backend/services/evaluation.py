@@ -35,7 +35,7 @@ def evaluate_source(source: str, *, trusted_local: bool = False, runner=None, co
     runner = runner or (_run_local if trusted_local else _run_docker)
     games = []
     try:
-        with tempfile.TemporaryDirectory(prefix="kaggriculture-official-") as temp_dir:
+        with tempfile.TemporaryDirectory(prefix="neural-coliseum-official-") as temp_dir:
             agent_path = Path(temp_dir) / "agent.py"
             agent_path.write_text(source, encoding="utf-8")
             replay_path = Path(temp_dir) / "official-replay.json"

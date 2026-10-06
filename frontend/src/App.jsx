@@ -142,12 +142,12 @@ function App() {
       </div>
     </header>
     <nav className="product-nav">
-      {["lab", "sandbox", "analytics", "submissions", "leaderboard", "tournament", "guide"].map((item) => <button className={view === item ? "active" : ""} onClick={() => setView(item)} key={item}>{item === "lab" ? "Bot Lab" : item}</button>)}
+      {["lab", "strategy", "sandbox", "analytics", "submissions", "leaderboard", "tournament", "guide"].map((item) => <button className={view === item ? "active" : ""} onClick={() => setView(item)} key={item}>{item === "lab" ? "Bot Lab" : item === "strategy" ? "Strategy Path" : item}</button>)}
     </nav>
 
     {view !== "tournament" ? <ContestantPortal section={view} onNavigate={setView} /> : isRegistration ? <main id="top">
       <section className="hero" style={{ "--arena-image": `url(${arenaImage})` }}><div className="hero-grid" /><div className="hero-copy">
-        <span className="eyebrow">NIT WARANGAL · AI / ML CLUB</span><h1>Train the mind.<br /><span>Conquer the field.</span></h1>
+        <span className="eyebrow">SDC (AI/ML WING) · NIT WARANGAL</span><h1>Train the mind.<br /><span>Conquer the field.</span></h1>
         <p>Machine learning agents enter a single-elimination simulation arena. Every inference, action, and market decision determines who advances.</p>
         <div className="hero-metrics"><div><b>{String(players.length).padStart(2, "0")}</b><span>bots armed</span></div><div><b>720</b><span>turns per duel</span></div><div><b>1V1</b><span>zero second chances</span></div></div>
       </div><div className="hero-stamp"><span>SEASON</span><b>01</b><small>LIVE BUILD</small></div></section>
@@ -179,7 +179,7 @@ function App() {
     {view === "tournament" && battleResult && <div className="result-reveal" onClick={() => setBattleResult(null)} role="status">
       <div className="result-shockwave" /><div className="result-content"><span>BATTLE COMPLETE</span><img src={brandMark} alt="" /><small>WINNER</small><h2>{battleResult.winner}</h2><div className="result-score"><b>{battleResult.player1}</b><strong>{score(battleResult.p1Score)} <i>—</i> {score(battleResult.p2Score)}</strong><b>{battleResult.player2}</b></div><p>ADVANCES TO THE NEXT ROUND</p></div>
     </div>}
-    <footer><span>NEURAL COLISEUM</span><span>NIT WARANGAL · AI/ML CLUB</span><span>BUILD 02.26</span></footer>
+    <footer><span>NEURAL COLISEUM</span><span>SDC (AI/ML WING) · NIT WARANGAL</span><span>HARVEST PROTOCOL</span></footer>
   </div>;
 }
 
