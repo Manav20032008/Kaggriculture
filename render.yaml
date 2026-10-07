@@ -1,0 +1,39 @@
+services:
+  - type: web
+    name: kaggriculture-api
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /docs
+    disk:
+      name: kaggri-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: KAGGRI_ENV
+        value: development
+      - key: KAGGRI_USE_DOCKER
+        value: "0"
+      - key: KAGGRI_DATA_DIR
+        value: /var/data
+      - key: KAGGRI_MAX_WORKERS
+        value: "1"
+      - key: KAGGRI_ADMIN_TOKEN
+        generateValue: true
+      - key: KAGGRI_CORS_ORIGINS
+        sync: false
+
+  - type: web
+    name: kaggriculture-frontend
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: VITE_API_BASE_URL
+        sync: false
