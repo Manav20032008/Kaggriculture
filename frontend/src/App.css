@@ -23,3 +23,37 @@
 
 @media(max-width:1000px){.guide-hero{grid-template-columns:1fr}.guide-order{border-left:0;border-top:1px solid var(--line);padding:22px 0 0}.guide-layout{grid-template-columns:1fr}.guide-nav{position:static;display:grid;grid-template-columns:repeat(4,1fr)}.guide-nav>span{grid-column:1/-1}.guide-nav a{border:1px solid rgba(255,255,255,.045)}.guide-intro-grid,.board-explainer{grid-template-columns:1fr}.quadrant-map{max-width:380px}.metric-grid{grid-template-columns:1fr 1fr}.step-line{grid-template-columns:repeat(5,minmax(120px,1fr));overflow-x:auto}}
 @media(max-width:650px){.guide-page{padding:25px 16px 80px}.guide-hero{min-height:460px;padding:30px 24px}.guide-hero h1{font-size:42px;overflow-wrap:anywhere}.guide-nav{grid-template-columns:1fr 1fr;gap:1px}.guide-nav a{min-height:42px;align-items:center}.guide-section{padding-bottom:58px}.guide-section-head{grid-template-columns:38px 1fr}.guide-section-head h2{font-size:37px}.guide-facts{grid-template-columns:1fr 1fr}.loop-diagram{grid-template-columns:1fr;justify-content:stretch}.loop-diagram div{display:flex;flex-direction:column}.loop-diagram b{min-height:52px}.loop-diagram i{transform:none;text-align:center}.animal-grid,.guide-card-grid,.action-reference,.validity-grid,.ownership-grid,.prompt-compare,.quick-list{grid-template-columns:1fr}.market-diagram{grid-template-columns:1fr}.market-diagram div{grid-template-columns:1fr;text-align:center}.market-diagram i{width:1px;height:26px;justify-self:center}.market-diagram i:after{display:none}.metric-grid{grid-template-columns:1fr}.mistakes{grid-template-columns:1fr}.mistakes>span{grid-column:auto}.iteration-example{align-items:flex-start;flex-direction:column}.iteration-example i{transform:none}.guide-final-actions{flex-direction:column}.guide-final-actions .button{justify-content:center}.quadrant-map>span{padding:16px}}
+.job-status{margin:18px 0;padding:18px 22px;border:1px solid rgba(185,255,56,.28);background:rgba(185,255,56,.055);display:grid;gap:10px}.job-status>div{display:flex;align-items:center;justify-content:space-between;gap:16px}.job-status span{font:700 11px/1.2 var(--mono);letter-spacing:.14em;color:var(--muted)}.job-status strong{font:800 13px/1.2 var(--mono);letter-spacing:.1em;color:var(--lime)}.job-status p{margin:0;color:var(--paper)}.job-failed{border-color:rgba(255,87,87,.45);background:rgba(255,87,87,.07)}.job-failed strong{color:#ff7777}.job-progress{height:4px;background:rgba(255,255,255,.09);overflow:hidden}.job-progress i{display:block;height:100%;background:var(--lime);transition:width .35s ease}
+.monitor-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin:18px 0}.monitor-value{font:800 clamp(32px,5vw,62px)/1 var(--display);color:var(--lime)}.failure-row{display:grid;grid-template-columns:110px 1fr auto;gap:18px;padding:13px 0;border-top:1px solid rgba(255,255,255,.09);align-items:start}.failure-row b{color:#ff7777;text-transform:uppercase}.failure-row span{overflow-wrap:anywhere}.failure-row time{color:var(--muted);font-size:12px}@media(max-width:700px){.monitor-grid{grid-template-columns:1fr}.failure-row{grid-template-columns:1fr;gap:5px}}
+
+/* FarmCraft: moonlit voxel fields, crop green, harvest gold. */
+:root{--ink:#07111f;--panel:#0d1b2a;--bone:#f3f4df;--muted:#9aabb5;--line:rgba(178,211,177,.17);--lime:#a3ed58;--amber:#ffbd48;--red:#ff685c;--mono:"DM Mono",monospace}
+.app-shell{background:#07111f;color:var(--bone)}
+.topbar{background:rgba(5,14,26,.96);border-color:rgba(163,237,88,.22)}
+.brand img{image-rendering:pixelated}
+.brand b{font-family:"Press Start 2P",monospace;font-size:12px;letter-spacing:-.03em;color:#a3ed58}
+.brand small{letter-spacing:.14em;color:#afc2bb}
+.status-light span{background:#a3ed58;box-shadow:0 0 14px #a3ed58}
+.product-nav{background:#091729;border-color:rgba(163,237,88,.18)}
+.product-nav button.active:after{height:3px;box-shadow:0 0 14px #a3ed5870}
+.hero{min-height:670px;background-image:linear-gradient(90deg,rgba(4,12,23,.88) 0%,rgba(4,12,23,.64) 43%,rgba(4,12,23,.08) 100%),linear-gradient(0deg,#07111f 0%,transparent 24%),var(--arena-image);background-position:center,right center;border-color:rgba(163,237,88,.22)}
+.hero:after{background:linear-gradient(rgba(167,239,111,.018) 1px,transparent 1px);background-size:100% 6px;opacity:.5}
+.hero-grid{background-image:linear-gradient(#a3ed58 1px,transparent 1px),linear-gradient(90deg,#a3ed58 1px,transparent 1px);opacity:.1}
+.eyebrow,.panel-label,.round-kicker{color:#a3ed58}
+.hero h1,.battle-hero h1,.portal-head h1,.guide-hero h1{font-family:"Press Start 2P",monospace;font-size:clamp(25px,4.2vw,48px);line-height:1.55;letter-spacing:0;margin:28px 0}
+.hero h1 span{color:#a3ed58;-webkit-text-stroke:0;text-shadow:4px 4px 0 #275a32}
+.hero-copy>p{color:#d2decf;max-width:540px}
+.hero-metrics{border-color:rgba(163,237,88,.35)}
+.hero-metrics div{border-color:rgba(163,237,88,.23)}
+.hero-metrics b{color:#fff4ca}
+.hero-stamp{border:3px solid #a3ed58;background:#0d1b2a;box-shadow:5px 5px 0 #385e3b;transform:none}
+.hero-stamp span,.hero-stamp small{color:#a3ed58}
+.registration-zone,.battle-content,.portal-page,.guide-page{background-color:#07111f}
+.deploy-card,.roster-panel,.protocol-panel,.duel-card,.standing-panel,.lab-panel,.metric-card,.portal-empty,.guide-document{background-color:#0d1b2a;border-radius:0}
+.button,.file-target,.team-gate,.portal-identity,.leaderboard-table,.submission-row,.guide-document,.battle-nav{border-color:rgba(163,237,88,.23)}
+.button.primary,.admin-login button,.primary-action{background:#a3ed58;border-color:#a3ed58;color:#0a1a0c;box-shadow:3px 3px 0 #356536}
+.button.primary:hover:not(:disabled),.admin-login button:hover,.primary-action:hover{background:#c0ff78;box-shadow:4px 4px 0 #356536}
+.status-light.status-round_running span,.status-light.status-final span{background:#ffbd48;box-shadow:0 0 12px #ffbd48}
+.winner-verdict,.result-content{border-color:#a3ed58}
+footer{background:#06101e;border-top-color:rgba(163,237,88,.25);color:#a3ed58}
+@media(max-width:640px){.hero{background-image:linear-gradient(90deg,rgba(4,12,23,.84),rgba(4,12,23,.4)),linear-gradient(0deg,#07111f 0%,transparent 55%),var(--arena-image);background-position:58% center}.hero h1,.battle-hero h1,.portal-head h1,.guide-hero h1{font-size:clamp(22px,7vw,36px);line-height:1.65}.brand b{font-size:10px}}

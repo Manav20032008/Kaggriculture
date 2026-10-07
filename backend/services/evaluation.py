@@ -30,7 +30,7 @@ def evaluation_plan(config: dict | None = None) -> list[dict]:
     ]
 
 
-def evaluate_source(source: str, *, trusted_local: bool = False, runner=None, config: dict | None = None) -> dict:
+def evaluate_source(source: str, *, trusted_local: bool = False, runner=None, config: dict | None = None, progress=None) -> dict:
     config = config or load_scoring_config()
     runner = runner or (_run_local if trusted_local else _run_docker)
     games = []
@@ -39,7 +39,8 @@ def evaluate_source(source: str, *, trusted_local: bool = False, runner=None, co
             agent_path = Path(temp_dir) / "agent.py"
             agent_path.write_text(source, encoding="utf-8")
             replay_path = Path(temp_dir) / "official-replay.json"
-            for item in evaluation_plan(config):
+            plan = evaluation_plan(config)
+            for index, item in enumerate(plan, 1):
                 opponent_path = PRIVATE_OPPONENTS.get(item["opponent"])
                 if not opponent_path or not opponent_path.is_file():
                     raise EvaluationError("Official evaluation configuration references an unavailable baseline.")
@@ -51,6 +52,8 @@ def evaluate_source(source: str, *, trusted_local: bool = False, runner=None, co
                     "seed": item["seed"], "side": item["side"],
                     "contestantMoney": contestant, "opponentMoney": opponent,
                 })
+                if progress:
+                    progress(index, len(plan))
     except EvaluationError:
         raise
     except Exception as exc:

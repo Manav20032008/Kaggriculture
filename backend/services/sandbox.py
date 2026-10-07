@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import tempfile
 import time
@@ -16,7 +17,7 @@ from backend.services.analytics import analyze_replay
 ROOT = Path(__file__).resolve().parents[2]
 RUN_MATCH = ROOT / "run_match.py"
 DOCKER_IMAGE = "nitw-farm-ai-evaluator"
-MATCH_TIMEOUT_SECONDS = 120
+MATCH_TIMEOUT_SECONDS = int(os.getenv("MATCH_TIMEOUT_SECONDS", "120"))
 REPLAY_DIR = ROOT / "data" / "replays"
 REPLAY_DIR.mkdir(parents=True, exist_ok=True)
 BENCHMARKS = {

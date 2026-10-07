@@ -1,13 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
-import arenaImage from "./assets/neural-coliseum-arena.png";
-import brandMark from "./assets/neural-coliseum-mark.png";
+import arenaImage from "./assets/farmcraft-arena.png";
+const brandMark = "/farmcraft-mark.svg";
 import ContestantPortal from "./Lab.jsx";
+import AdminApp from "./AdminApp.jsx";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8000";
 const EMPTY_STATE = {
   status: "registration", message: "Registration is open.", playersCount: 0,
-  maxPlayers: 60, registeredPlayers: [], currentRound: 0, totalRoundsEstimate: 0,
+  maxPlayers: 100, registeredPlayers: [], currentRound: 0, totalRoundsEstimate: 0,
   currentMatches: [], roundsHistory: [], byes: [], eliminatedPlayers: [],
   allMatches: [], champion: null, finalScore: null, error: null, isLive: false,
 };
@@ -62,10 +63,10 @@ function App() {
   const [tab, setTab] = useState("arena");
   const [notice, setNotice] = useState(null);
   const [busy, setBusy] = useState(false);
-  const [demoOpen, setDemoOpen] = useState(false);
   const [tick, setTick] = useState(0);
   const [battleResult, setBattleResult] = useState(null);
-  const [view, setView] = useState("lab");
+  const [eventConfig, setEventConfig] = useState(null);
+  const [view, setView] = useState("tournament");
   const seenResults = useRef(new Set());
   const resultTimer = useRef(null);
   const isRegistration = tournament.status === "registration";
@@ -73,16 +74,20 @@ function App() {
   const isChampion = tournament.status === "champion";
   const featuredMatch = tournament.currentMatches?.find((m) => m.status === "running") || tournament.currentMatches?.[0];
 
-  async function refresh() {
+  const refresh = useCallback(async () => {
     try {
-      const [playersRes, statusRes] = await Promise.all([fetch(`${API_BASE}/players`), fetch(`${API_BASE}/tournament/status`)]);
+      const [playersRes, statusRes, eventRes] = await Promise.all([fetch(`${API_BASE}/players`), fetch(`${API_BASE}/tournament/status`), fetch(`${API_BASE}/event/status`)]);
       if (playersRes.ok) setPlayers((await playersRes.json()).players || []);
       if (statusRes.ok) setTournament(await statusRes.json());
+      if (eventRes.ok) setEventConfig(await eventRes.json());
     } catch { setNotice({ type: "error", text: "Arena backend is offline." }); }
-  }
+  }, []);
 
-  useEffect(() => { refresh(); }, []);
-  useEffect(() => { const timer = setInterval(refresh, isActive ? 1000 : 3000); return () => clearInterval(timer); }, [isActive]);
+  useEffect(() => {
+    const initial = window.setTimeout(() => { void refresh(); }, 0);
+    const timer = window.setInterval(() => { void refresh(); }, isActive ? 3000 : 15000);
+    return () => { window.clearTimeout(initial); window.clearInterval(timer); };
+  }, [isActive, refresh]);
   useEffect(() => { if (!isActive) return undefined; const timer = setInterval(() => setTick((value) => value + 1), 1450); return () => clearInterval(timer); }, [isActive]);
   useEffect(() => {
     const completed = [...(tournament.allMatches || []), ...(tournament.currentMatches || [])]
@@ -117,39 +122,24 @@ function App() {
     } catch (error) { setNotice({ type: "error", text: error.message }); } finally { setBusy(false); }
   }
 
-  async function post(path, successTab) {
-    setBusy(true);
-    try {
-      const response = await fetch(`${API_BASE}${path}`, { method: "POST" }); const data = await response.json();
-      if (!response.ok) throw new Error(data.detail || "Command failed."); if (successTab) setTab(successTab); await refresh();
-    } catch (error) { setNotice({ type: "error", text: error.message }); } finally { setBusy(false); }
-  }
-
   const survivors = tournament.registeredPlayers?.filter((name) => !(tournament.eliminatedPlayers || []).some((entry) => playerName(entry) === playerName(name) || entry.player === playerName(name))) || [];
 
   return <div className="app-shell">
     <header className="topbar">
-      <a className="brand" href="#top" aria-label="Neural Coliseum home"><img src={brandMark} alt="Neural Coliseum crest" /><span><b>NEURAL COLISEUM</b><small>MACHINE LEARNING BATTLE ARENA</small></span></a>
+      <a className="brand" href="#top" aria-label="FarmCraft home"><img src={brandMark} alt="FarmCraft pixel farm emblem" /><span><b>FARMCRAFT</b><small>AI FARMING AGENT CHAMPIONSHIP</small></span></a>
       <StatusLight status={tournament.status} />
-      <div className="top-actions">
-        {view === "tournament" && (isRegistration ? <>
-          <div className="demo-wrap"><button className="button ghost" onClick={() => setDemoOpen(!demoOpen)}>Demo roster</button>{demoOpen && <div className="demo-menu">
-            {[4, 8, 16].map((count) => <button key={count} onClick={() => { setDemoOpen(false); post(`/demo/populate-sample-players?count=${count}`); }}>{count} bots</button>)}
-            <button className="danger" onClick={() => { setDemoOpen(false); post("/players/clear"); }}>Clear roster</button>
-          </div>}</div>
-          <button className="button primary" disabled={busy || players.length < 2} onClick={() => post("/start-tournament", "arena")}>Launch tournament</button>
-        </> : <button className="button ghost" disabled={busy || isActive} onClick={() => post("/tournament/reset", "arena")}>Reset arena</button>)}
-      </div>
+      <div className="top-actions" />
     </header>
     <nav className="product-nav">
       {["lab", "strategy", "sandbox", "analytics", "submissions", "leaderboard", "tournament", "guide"].map((item) => <button className={view === item ? "active" : ""} onClick={() => setView(item)} key={item}>{item === "lab" ? "Bot Lab" : item === "strategy" ? "Strategy Path" : item}</button>)}
     </nav>
+    {eventConfig && (eventConfig.mode !== "DEVELOPMENT" || !eventConfig.uploadsEnabled || !eventConfig.sandboxEnabled || !eventConfig.officialEnabled || !eventConfig.tournamentEnabled) && <div className="notice event-status-notice">EVENT MODE · {eventConfig.mode}{[!eventConfig.uploadsEnabled && "uploads", !eventConfig.sandboxEnabled && "sandbox runs", !eventConfig.officialEnabled && "official submissions", !eventConfig.tournamentEnabled && "tournament launch"].filter(Boolean).length > 0 && ` — paused: ${[!eventConfig.uploadsEnabled && "uploads", !eventConfig.sandboxEnabled && "sandbox runs", !eventConfig.officialEnabled && "official submissions", !eventConfig.tournamentEnabled && "tournament launch"].filter(Boolean).join(", ")}.`}</div>}
 
     {view !== "tournament" ? <ContestantPortal section={view} onNavigate={setView} /> : isRegistration ? <main id="top">
       <section className="hero" style={{ "--arena-image": `url(${arenaImage})` }}><div className="hero-grid" /><div className="hero-copy">
-        <span className="eyebrow">SDC (AI/ML WING) · NIT WARANGAL</span><h1>Train the mind.<br /><span>Conquer the field.</span></h1>
-        <p>Machine learning agents enter a single-elimination simulation arena. Every inference, action, and market decision determines who advances.</p>
-        <div className="hero-metrics"><div><b>{String(players.length).padStart(2, "0")}</b><span>bots armed</span></div><div><b>720</b><span>turns per duel</span></div><div><b>1V1</b><span>zero second chances</span></div></div>
+        <span className="eyebrow">SDC (AI/ML WING) · NIT WARANGAL</span><h1>Build your agent.<br /><span>Master the farm.</span></h1>
+        <p>Plant a strategy. Train an AI farmer. Compete in a living farm simulation where every turn can change the leaderboard.</p>
+        <div className="hero-metrics"><div><b>{String(players.length).padStart(2, "0")}</b><span>agents registered</span></div><div><b>720</b><span>turns per match</span></div><div><b>1V1</b><span>head-to-head rounds</span></div></div>
       </div><div className="hero-stamp"><span>SEASON</span><b>01</b><small>LIVE BUILD</small></div></section>
 
       <section className="registration-zone"><div className="section-title"><span>01 / ENTER THE ARENA</span><h2>Deploy your contender</h2></div><div className="registration-grid">
@@ -158,7 +148,7 @@ function App() {
           <label>Python combat logic<div className={`file-target ${agentFile ? "loaded" : ""}`}><input id="agent-file-input" type="file" accept=".py" onChange={(e) => setAgentFile(e.target.files?.[0] || null)} /><span>{agentFile ? "FILE LOCKED" : "DROP AGENT.PY"}</span><b>{agentFile?.name || "Maximum 100 KB · def agent(obs) required"}</b></div></label>
           <button className="button primary wide" disabled={busy}>{busy ? "Validating…" : "Register bot"}</button>{notice && <div className={`notice ${notice.type}`}>{notice.text}</div>}
         </form>
-        <div className="roster-panel"><div className="panel-label">ACTIVE ROSTER <b>{players.length}/60</b></div><div className="roster-list">{players.length ? players.map((player, index) => <div className="roster-row" key={player.username}><span>{String(index + 1).padStart(2, "0")}</span><strong>{player.username}</strong><i>READY</i></div>) : <div className="empty-state">The arena is quiet.<br />Register the first bot.</div>}</div></div>
+        <div className="roster-panel"><div className="panel-label">ACTIVE ROSTER <b>{players.length}/100</b></div><div className="roster-list">{players.length ? players.map((player, index) => <div className="roster-row" key={player.username}><span>{String(index + 1).padStart(2, "0")}</span><strong>{player.username}</strong><i>READY</i></div>) : <div className="empty-state">The arena is quiet.<br />Register the first bot.</div>}</div></div>
         <div className="protocol-panel"><div className="panel-label">BATTLE PROTOCOL</div><ol><li><b>01</b><span>Random pairings</span></li><li><b>02</b><span>720-turn farm simulation</span></li><li><b>03</b><span>Highest bank survives</span></li><li><b>04</b><span>Ties trigger overtime</span></li></ol></div>
       </div></section>
     </main> : <main className="battle-page">
@@ -179,8 +169,10 @@ function App() {
     {view === "tournament" && battleResult && <div className="result-reveal" onClick={() => setBattleResult(null)} role="status">
       <div className="result-shockwave" /><div className="result-content"><span>BATTLE COMPLETE</span><img src={brandMark} alt="" /><small>WINNER</small><h2>{battleResult.winner}</h2><div className="result-score"><b>{battleResult.player1}</b><strong>{score(battleResult.p1Score)} <i>—</i> {score(battleResult.p2Score)}</strong><b>{battleResult.player2}</b></div><p>ADVANCES TO THE NEXT ROUND</p></div>
     </div>}
-    <footer><span>NEURAL COLISEUM</span><span>SDC (AI/ML WING) · NIT WARANGAL</span><span>HARVEST PROTOCOL</span></footer>
+    <footer><span>FARMCRAFT</span><span>SDC (AI/ML WING) · NIT WARANGAL</span><span>AI FARMING AGENT CHAMPIONSHIP</span></footer>
   </div>;
 }
 
-export default App;
+function Root() { return window.location.pathname.startsWith("/admin") ? <AdminApp /> : <App />; }
+
+export default Root;

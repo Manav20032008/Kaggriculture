@@ -1,7 +1,7 @@
-@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap');
-:root { font-family: "Manrope", sans-serif; color: #f1f0e8; background: #0b0d0b; font-synthesis: none; text-rendering: optimizeLegibility; }
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&family=Press+Start+2P&display=swap');
+:root { font-family: "Manrope", sans-serif; color: #f3f4df; background: #07111f; font-synthesis: none; text-rendering: optimizeLegibility; }
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; }
-body { margin: 0; min-width: 320px; min-height: 100vh; background: #0b0d0b; }
+body { margin: 0; min-width: 320px; min-height: 100vh; background: #07111f; }
 button, input { font: inherit; }
 button { color: inherit; }

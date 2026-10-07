@@ -19,7 +19,7 @@ export default function GuidePage({ onNavigate }) {
     <div className="guide-layout">
       <aside className="guide-nav"><span>ON THIS PAGE</span>{GUIDE_SECTIONS.map(([id, label], index) => <a href={`#${id}`} key={id}><b>{String(index + 1).padStart(2, "0")}</b>{label}</a>)}</aside>
       <article className="guide-body">
-        <Section id="overview" number="01" eyebrow="MISSION BRIEF" title="What is Harvest Protocol?">
+        <Section id="overview" number="01" eyebrow="MISSION BRIEF" title="What is FarmCraft?">
           <div className="guide-intro-grid"><div><p>Two AI-controlled farms compete through a fixed 30-day season. Your bot controls farming, workers, crops, animals, buying, selling and expansion.</p><p className="guide-lede">You are not manually playing. You are writing an AI agent that receives the current state and chooses actions every turn.</p></div><div className="guide-facts">{GAME_FACTS.map(([value, label]) => <div key={label}><strong>{value}</strong><span>{label}</span></div>)}</div></div>
           <Callout label="WIN CONDITION">The player with the most bank money after turn 720 wins. Unsold products, carried items, seeds, animals and land do not automatically become score.</Callout>
         </Section>
