@@ -37,9 +37,9 @@ if str(ROOT) not in sys.path:
 from py_env import get_kaggle_python
 from agent_validation import validate_agent_source
 from event_api import router as event_router, get_store
+from runtime_config import configured_cors_origins
 
 PLAYERS_DIR = ROOT / "players"
-PLAYERS_DIR.mkdir(exist_ok=True)
 
 EXAMPLES_DIR = ROOT / "NITW_Farm_AI_Challenge_v1" / "examples"
 STARTER_DIR = ROOT / "NITW_Farm_AI_Participant_Starter"
@@ -60,18 +60,27 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=configured_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 app.include_router(event_router)
+
+
+@app.on_event("startup")
+def recover_persisted_evaluation():
+    """Resume persisted QUEUED/RUNNING jobs when the backend process restarts."""
+    state = get_store().get_state()
+    if state["status"].endswith("_EVALUATING"):
+        try:
+            from event_models import parse_round_from_state
+            from evaluation_queue import get_queue
+            get_queue(get_store()).start(parse_round_from_state(state["status"]))
+        except RuntimeError as exc:
+            # Expose the persisted state for diagnosis; production stays fail-closed.
+            print(f"Evaluation recovery deferred: {exc}", file=sys.stderr)
 
 
 # ============================================================

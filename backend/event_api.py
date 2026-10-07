@@ -5,11 +5,12 @@ import os
 from fastapi import APIRouter, File, Form, Header, HTTPException, Query, UploadFile
 
 from event_store import EventError, EventStore
+from runtime_config import DATABASE_PATH, SUBMISSIONS_DIR
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_STORE = EventStore(
-    db_path=ROOT / "data" / "event.sqlite",
-    files_dir=ROOT / "data" / "submissions",
+    db_path=DATABASE_PATH,
+    files_dir=SUBMISSIONS_DIR,
     compatibility_players_dir=ROOT / "players",
 )
 
@@ -35,6 +36,13 @@ def get_store() -> EventStore:
     return store
 
 
+def _public_record(record: dict | None) -> dict | None:
+    """Remove participant IDs and storage paths from public API data."""
+    if record is None:
+        return None
+    return {key: value for key, value in record.items() if key not in {"participant_id", "file_path"}}
+
+
 def _raise(exc: EventError):
     raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
@@ -45,7 +53,11 @@ def get_event_state():
     if state["status"].endswith("_EVALUATING"):
         from event_models import parse_round_from_state
         from evaluation_queue import get_queue
-        get_queue(get_store()).start(parse_round_from_state(state["status"]))
+        try:
+            get_queue(get_store()).start(parse_round_from_state(state["status"]))
+        except RuntimeError:
+            # Keep the state endpoint available for diagnosis; no unsafe fallback occurs.
+            pass
     return state
 
 
@@ -60,13 +72,13 @@ def register_participant(username: str = Form(...)):
 @router.get("/event/participants")
 def list_participants():
     participants = get_store().list_participants()
-    return {"count": len(participants), "participants": participants}
+    return {"count": len(participants), "participants": [_public_record(row) for row in participants]}
 
 
 @router.get("/event/participants/{participant_id}")
 def get_participant(participant_id: str):
     try:
-        return get_store().get_participant(participant_id)
+        return _public_record(get_store().get_participant(participant_id))
     except EventError as exc:
         _raise(exc)
 
@@ -86,7 +98,7 @@ async def upload_submission(
     except UnicodeDecodeError:
         raise HTTPException(status_code=400, detail="Agent file must be valid UTF-8 encoded text.")
     try:
-        return get_store().upload_submission(participant_id, source_text)
+        return _public_record(get_store().upload_submission(participant_id, source_text))
     except EventError as exc:
         _raise(exc)
 
@@ -95,7 +107,7 @@ async def upload_submission(
 def get_submission_history(participant_id: str):
     try:
         items = get_store().list_submissions(participant_id)
-        return {"participant_id": participant_id, "count": len(items), "submissions": items}
+        return {"count": len(items), "submissions": [_public_record(item) for item in items]}
     except EventError as exc:
         _raise(exc)
 
@@ -105,9 +117,8 @@ def get_active_submission(participant_id: str, round: int = Query(..., ge=1, le=
     try:
         active = get_store().get_active_submission(participant_id, round)
         return {
-            "participant_id": participant_id,
             "round_number": round,
-            "active_submission": active,
+            "active_submission": _public_record(active),
         }
     except EventError as exc:
         _raise(exc)
@@ -116,7 +127,7 @@ def get_active_submission(participant_id: str, round: int = Query(..., ge=1, le=
 @router.get("/event/scores")
 def get_round_scores(round: int | None = Query(default=None)):
     try:
-        return {"scores": get_store().get_round_scores(round)}
+        return {"scores": [_public_record(row) for row in get_store().get_round_scores(round)]}
     except EventError as exc:
         _raise(exc)
 
@@ -124,16 +135,19 @@ def get_round_scores(round: int | None = Query(default=None)):
 @router.get("/event/standings")
 def get_standings():
     standings = get_store().get_standings()
-    return {"count": len(standings), "standings": standings}
+    return {"count": len(standings), "standings": [_public_record(row) for row in standings]}
 
 
 @router.get("/event/evaluation-jobs")
-def evaluation_jobs(round: int | None = Query(default=None, ge=1, le=3)):
-    jobs = get_store().get_evaluation_jobs(round)
+def evaluation_jobs(
+    round: int | None = Query(default=None, ge=1, le=3),
+    event_number: int | None = Query(default=None, ge=1),
+):
+    jobs = get_store().get_evaluation_jobs(round, event_number)
     counts = {}
     for job in jobs:
         counts[job["status"]] = counts.get(job["status"], 0) + 1
-    return {"count": len(jobs), "counts": counts, "jobs": jobs}
+    return {"count": len(jobs), "counts": counts, "jobs": [_public_record(job) for job in jobs]}
 
 
 @router.post("/event/admin/open-submissions")
@@ -158,12 +172,15 @@ def admin_lock_submissions(_=Header(default=None, alias="X-Admin-Token")):
 def admin_start_evaluation(round: int | None = Query(default=None), _=Header(default=None, alias="X-Admin-Token")):
     _require_admin(_)
     try:
-        state = get_store().start_evaluation_phase(round)
         from evaluation_queue import get_queue
-        get_queue(get_store()).start(state["current_round"])
+        queue = get_queue(get_store())  # fail closed before changing event state
+        state = get_store().start_evaluation_phase(round)
+        queue.start(state["current_round"])
         return state
     except EventError as exc:
         _raise(exc)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.post("/event/admin/complete-round")
@@ -187,7 +204,8 @@ def admin_process_results(round: int | None = Query(default=None), _=Header(defa
 @router.post("/event/admin/retry-system-errors")
 def admin_retry_system_errors(round: int = Query(..., ge=1, le=3), _=Header(default=None, alias="X-Admin-Token")):
     _require_admin(_)
-    count = get_store().retry_system_errors(round)
+    from evaluation_queue import MAX_SYSTEM_RETRIES
+    count = get_store().retry_system_errors(round, MAX_SYSTEM_RETRIES)
     if count:
         from evaluation_queue import get_queue
         get_queue(get_store()).start(round)
@@ -201,3 +219,63 @@ def admin_publish_final(_=Header(default=None, alias="X-Admin-Token")):
         return get_store().publish_final_results()
     except EventError as exc:
         _raise(exc)
+
+
+@router.get("/event/admin/overview")
+def admin_event_overview(_=Header(default=None, alias="X-Admin-Token")):
+    _require_admin(_)
+    return get_store().get_admin_overview()
+
+
+@router.post("/event/admin/reset")
+def admin_reset_event(_=Header(default=None, alias="X-Admin-Token")):
+    _require_admin(_)
+    try:
+        return get_store().reset_event()
+    except EventError as exc:
+        _raise(exc)
+
+
+@router.post("/event/admin/test-participants")
+def admin_add_test_participants(count: int = Query(..., ge=1, le=80), _=Header(default=None, alias="X-Admin-Token")):
+    _require_admin(_)
+    store = get_store()
+    if store.get_state()["status"] != "REGISTRATION":
+        raise HTTPException(status_code=409, detail="Test participants can be added only during registration.")
+    existing = {p["username"] for p in store.list_participants()}
+    added = []
+    index = 1
+    while len(added) < count:
+        username = f"TEST_PLAYER_{index:03d}"
+        index += 1
+        if username in existing:
+            continue
+        try:
+            added.append(store.register_participant(username))
+        except EventError as exc:
+            _raise(exc)
+    return {"count": len(added), "participants": added}
+
+
+@router.post("/event/admin/seed-test-agents")
+def admin_seed_test_agents(_=Header(default=None, alias="X-Admin-Token")):
+    _require_admin(_)
+    store = get_store()
+    if store.get_state()["status"] != "ROUND_1_SUBMISSION_OPEN":
+        raise HTTPException(status_code=409, detail="Starter agents can be seeded only while Round 1 submissions are open.")
+    starter = ROOT / "NITW_Farm_AI_Challenge_v1" / "examples" / "starter_agent.py"
+    try:
+        source = starter.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail="The bundled starter agent is unavailable.") from exc
+    added = []
+    for participant in store.list_participants():
+        if not participant["username"].startswith("TEST_PLAYER_"):
+            continue
+        if store.list_submissions(participant["participant_id"]):
+            continue
+        try:
+            added.append({"username": participant["username"], **store.upload_submission(participant["participant_id"], source)})
+        except EventError as exc:
+            _raise(exc)
+    return {"count": len(added), "submissions": added}

@@ -25,3 +25,8 @@ node_modules/
 .venv/
 venv/
 engine_ast.txt
+
+# Local runtime/event data
+/data/
+*.sqlite
+*.sqlite-*
