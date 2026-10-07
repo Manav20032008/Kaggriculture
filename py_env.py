@@ -1,23 +1,40 @@
-"""Resolve the Python interpreter used to run Harvest Protocol matches.
+"""Resolve the Python interpreter used to run Kaggriculture evaluations."""
 
-This module is intentionally tracked because the backend, tournament runner,
-and command-line utilities all import it on a clean checkout.
-"""
-
+import importlib.util
 import os
 from pathlib import Path
+import shutil
 import sys
 
 
 def get_kaggle_python() -> str:
-    """Return an explicit project interpreter or the current Python executable."""
+    """Prefer the current environment, then configured and project interpreters."""
     root = Path(__file__).resolve().parent
-    configured = os.environ.get("NEURAL_COLISEUM_PYTHON")
+    if importlib.util.find_spec("kaggle_environments") is not None:
+        return sys.executable
+
+    configured = os.environ.get("NEURAL_COLISEUM_PYTHON") or os.environ.get("KAGGRI_PYTHON")
     candidates = (
         Path(configured).expanduser() if configured else None,
         root / "NITW_Farm_AI_Challenge_v2_Web" / ".venv" / "Scripts" / "python.exe",
         root / "NITW_Farm_AI_Challenge_v2_Web" / ".venv" / "bin" / "python",
         root / ".venv" / "Scripts" / "python.exe",
         root / ".venv" / "bin" / "python",
+        Path(shutil.which("python3") or "") if shutil.which("python3") else None,
+        Path(shutil.which("python") or "") if shutil.which("python") else None,
     )
-    return str(next((path for path in candidates if path and path.is_file()), Path(sys.executable)))
+    for candidate in candidates:
+        if candidate and candidate.is_file():
+            try:
+                import subprocess
+                result = subprocess.run(
+                    [str(candidate), "-c", "import kaggle_environments"],
+                    capture_output=True,
+                    timeout=5,
+                    check=False,
+                )
+                if result.returncode == 0:
+                    return str(candidate)
+            except (OSError, subprocess.SubprocessError):
+                continue
+    return sys.executable

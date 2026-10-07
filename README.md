@@ -370,3 +370,68 @@ Per-crop seed costs and per-product base prices are not configurable; they are d
 | townCenterSellInterval | 24 | Turns between consumption ticks by the town center (flat rate, once per day) |
 | seed | null | Optional input seed for deterministic episode generation; cleared from config after read so it stays out of agent observations |
 
+# Official three-round event application
+
+The current official web application uses the persistent SQLite event API and
+the three-round cumulative rules. The old knockout modules remain in the repo
+for reference; their public start, reset, demo and registration routes return
+HTTP 410 and are not used by the frontend.
+
+Participant agent format and game interface: see [PARTICIPANT_GUIDE.md](PARTICIPANT_GUIDE.md).
+
+Start the backend from the repository root after installing the existing FastAPI
+application dependencies in the intended Python environment:
+
+```powershell
+$env:KAGGRI_ADMIN_TOKEN = "choose-a-long-random-secret"
+$env:KAGGRI_PYTHON = "C:\path\to\python-with-kaggle-environments.exe"
+$env:KAGGRI_MAX_WORKERS = "2"
+$env:KAGGRI_EVAL_TIMEOUT = "150"
+& $env:KAGGRI_PYTHON -m uvicorn main:app --app-dir backend --host 127.0.0.1 --port 8000
+```
+
+On Linux, configure the same settings with environment variables and start with
+`python -m uvicorn main:app --app-dir backend --host 0.0.0.0 --port $PORT`.
+Set `KAGGRI_DATA_DIR` to the absolute path of a persistent writable mount; the
+SQLite database, immutable submission files, and evaluator temporary files are
+stored under that directory. Set `KAGGRI_ADMIN_TOKEN` to a long random secret,
+`KAGGRI_CORS_ORIGINS` to the comma-separated frontend origins, and
+`VITE_API_BASE_URL` at frontend build time when the UI and API use different
+origins. `KAGGRI_ENV=production` enables fail-closed Docker requirements; set
+`KAGGRI_USE_DOCKER=1` and make the existing evaluator image available on that
+host. Do not use a local-only or ephemeral filesystem for event data.
+
+Start the frontend in a second terminal:
+
+```powershell
+cd frontend
+npm run dev
+```
+
+In development, Vite proxies `/api/*` to `http://127.0.0.1:8000` and strips the
+`/api` prefix. Set `VITE_BACKEND_URL` to change that proxy target, or set
+`VITE_API_BASE_URL` to use a direct API base URL.
+
+The admin token is required for every event transition. Workflow: open a round's
+submission window, lock it, start evaluation, wait for the queue, process
+results, publish the round leaderboard, then open the next round. After Round 3,
+finalize results. `KAGGRI_MAX_WORKERS` bounds concurrent Kaggriculture child
+processes (default 2). `KAGGRI_EVAL_TIMEOUT` sets each job's timeout in seconds.
+System errors are retried up to `KAGGRI_SYSTEM_RETRIES` times (default 2); a
+remaining system error blocks result processing until an admin retries it.
+On a local development host with Docker, set `KAGGRI_USE_DOCKER=1` and build the existing
+evaluation image with
+`docker build -t nitw-farm-ai-evaluator -f NITW_Farm_AI_Challenge_v1/Dockerfile NITW_Farm_AI_Challenge_v1`.
+The default is the local subprocess worker for development only. Production
+mode refuses to evaluate unless Docker isolation is explicitly enabled and the
+Docker CLI/image are available; it never falls back to executing participant
+code on the server host.
+
+Submissions and metadata are immutable records under `KAGGRI_DATA_DIR` in
+`submissions/`; event state, jobs, raw results, round scores and published
+leaderboard snapshots live in `event.sqlite`. Configure `KAGGRI_PYTHON` only
+when the evaluator package is installed in a separate interpreter. The worker
+runs in a subprocess on local Windows; deploy public untrusted submissions with
+the included Docker worker isolation. No Docker installation is performed by
+the application. Run one backend instance unless a shared cross-instance worker
+limit is configured outside this application.

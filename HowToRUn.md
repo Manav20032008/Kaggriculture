@@ -260,13 +260,13 @@ hostname -I
 Example:
 
 ```text
-192.168.1.15
+YOUR_SERVER_IP
 ```
 
 Then another computer on the same network can open:
 
 ```text
-http://192.168.1.15:8000
+http://YOUR_SERVER_IP:8000
 ```
 
 The server must be started with:
