@@ -13,6 +13,54 @@ from evaluation_queue import EvaluationQueue
 
 @unittest.skipUnless(os.environ.get("KAGGRI_RUN_REAL_EVALUATOR") == "1", "set KAGGRI_RUN_REAL_EVALUATOR=1 with Kaggle dependencies installed")
 class RealEvaluatorSmoke(unittest.TestCase):
+    def test_twenty_participants_three_rounds_real_evaluator_pipeline(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            store = EventStore(root / "event.sqlite", root / "submissions")
+            source = (Path(__file__).resolve().parent.parent / "NITW_Farm_AI_Challenge_v1" / "examples" / "starter_agent.py").read_text(encoding="utf-8")
+            participants = [store.register_participant(f"Demo_{i:02d}") for i in range(20)]
+            queue = EvaluationQueue(store)
+            all_jobs = []
+            elapsed = []
+            try:
+                for round_number in (1, 2, 3):
+                    store.open_submission_window(round_number)
+                    if round_number == 1:
+                        for participant in participants:
+                            store.upload_submission(participant["participant_id"], source)
+                    store.lock_submission_window()
+                    store.start_evaluation_phase(round_number)
+                    round_jobs = store.get_evaluation_jobs(round_number)
+                    self.assertEqual(len(round_jobs), 20)
+                    self.assertEqual(len({job["participant_id"] for job in round_jobs}), 20)
+                    self.assertEqual(len({job["job_id"] for job in round_jobs}), 20)
+                    all_jobs.extend(round_jobs)
+                    started = time.monotonic()
+                    queue.start(round_number)
+                    deadline = started + 300
+                    while time.monotonic() < deadline:
+                        round_jobs = store.get_evaluation_jobs(round_number)
+                        if len(round_jobs) == 20 and all(job["status"] not in ("QUEUED", "RUNNING", "RETRYING") for job in round_jobs):
+                            break
+                        time.sleep(0.25)
+                    elapsed.append(time.monotonic() - started)
+                    self.assertEqual(len(round_jobs), 20)
+                    self.assertTrue(all(job["status"] == "SUCCESS" for job in round_jobs), [job for job in round_jobs if job["status"] != "SUCCESS"])
+                    store.begin_result_processing(round_number)
+                    store.complete_evaluation_phase(round_number)
+                    self.assertEqual(len(store.get_standings()), 20)
+                store.publish_final_results()
+                standings = store.get_standings()
+                self.assertEqual(store.get_state()["status"], "FINAL_RESULTS")
+                self.assertEqual(len(standings), 20)
+                self.assertEqual(len(all_jobs), 60)
+                self.assertEqual(len({job["job_id"] for job in all_jobs}), 60)
+                for entry in standings:
+                    self.assertAlmostEqual(entry["total_score"], entry["round1_score"] + entry["round2_score"] + entry["round3_score"])
+                print(f"REAL_20X3 evaluation_seconds={sum(elapsed):.2f} wall_time_per_job={sum(elapsed)/60:.2f} successful=60 total_jobs=60")
+            finally:
+                queue.pool.shutdown(wait=True)
+
     def test_queue_runs_actual_720_step_kaggriculture_match(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

@@ -98,6 +98,45 @@ class EventApiIntegration(unittest.TestCase):
             self.assertEqual(opened_round_2.json()["status"], "ROUND_2_SUBMISSION_OPEN")
             os.environ.pop("KAGGRI_ADMIN_TOKEN", None)
 
+    def test_authenticated_reusable_event_controls(self):
+        with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {"KAGGRI_ADMIN_TOKEN": "event-test-token"}):
+            import event_api
+            original_store = event_api.store
+            event_api.store = EventStore(Path(temp) / "admin.sqlite", Path(temp) / "submissions")
+            from main import app
+            try:
+                client = TestClient(app)
+                self.assertEqual(client.get("/event/admin/overview").status_code, 401)
+                admin = {"X-Admin-Token": "event-test-token"}
+                self.assertEqual(client.get("/event/admin/overview", headers=admin).json()["event"]["event_number"], 1)
+                created = client.post("/event/admin/test-participants?count=3", headers=admin)
+                self.assertEqual(created.status_code, 200, created.text)
+                self.assertEqual(created.json()["count"], 3)
+                opened = client.post("/event/admin/open-submissions?round=1", headers=admin)
+                self.assertEqual(opened.status_code, 200)
+                seeded = client.post("/event/admin/seed-test-agents", headers=admin)
+                self.assertEqual(seeded.status_code, 200, seeded.text)
+                self.assertEqual(seeded.json()["count"], 3)
+                self.assertEqual(client.post("/event/admin/lock-submissions", headers=admin).status_code, 200)
+                with patch("evaluation_queue.get_queue"):
+                    self.assertEqual(client.post("/event/admin/start-evaluation?round=1", headers=admin).status_code, 200)
+                self.assertEqual(client.post("/event/admin/reset", headers=admin).status_code, 409)
+
+                # Clear queued jobs only after they are made terminal; regular pipeline owns them.
+                jobs = event_api.store.get_evaluation_jobs(1)
+                for job in jobs:
+                    event_api.store.finish_job(job["job_id"], "SUCCESS", 1)
+                reset = client.post("/event/admin/reset", headers=admin)
+                self.assertEqual(reset.status_code, 200, reset.text)
+                self.assertEqual(reset.json()["status"], "REGISTRATION")
+                self.assertEqual(reset.json()["event_number"], 2)
+                overview = client.get("/event/admin/overview", headers=admin).json()
+                self.assertEqual(overview["participants"], 0)
+                self.assertEqual(overview["submissions"], 0)
+                self.assertEqual(overview["evaluation_jobs"], {})
+            finally:
+                event_api.store = original_store
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

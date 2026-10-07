@@ -390,6 +390,17 @@ $env:KAGGRI_EVAL_TIMEOUT = "150"
 & $env:KAGGRI_PYTHON -m uvicorn main:app --app-dir backend --host 127.0.0.1 --port 8000
 ```
 
+On Linux, configure the same settings with environment variables and start with
+`python -m uvicorn main:app --app-dir backend --host 0.0.0.0 --port $PORT`.
+Set `KAGGRI_DATA_DIR` to the absolute path of a persistent writable mount; the
+SQLite database, immutable submission files, and evaluator temporary files are
+stored under that directory. Set `KAGGRI_ADMIN_TOKEN` to a long random secret,
+`KAGGRI_CORS_ORIGINS` to the comma-separated frontend origins, and
+`VITE_API_BASE_URL` at frontend build time when the UI and API use different
+origins. `KAGGRI_ENV=production` enables fail-closed Docker requirements; set
+`KAGGRI_USE_DOCKER=1` and make the existing evaluator image available on that
+host. Do not use a local-only or ephemeral filesystem for event data.
+
 Start the frontend in a second terminal:
 
 ```powershell
@@ -408,14 +419,19 @@ finalize results. `KAGGRI_MAX_WORKERS` bounds concurrent Kaggriculture child
 processes (default 2). `KAGGRI_EVAL_TIMEOUT` sets each job's timeout in seconds.
 System errors are retried up to `KAGGRI_SYSTEM_RETRIES` times (default 2); a
 remaining system error blocks result processing until an admin retries it.
-On a host with Docker, set `KAGGRI_USE_DOCKER=1` and build the existing
+On a local development host with Docker, set `KAGGRI_USE_DOCKER=1` and build the existing
 evaluation image with
 `docker build -t nitw-farm-ai-evaluator -f NITW_Farm_AI_Challenge_v1/Dockerfile NITW_Farm_AI_Challenge_v1`.
-The default is the local subprocess worker for Windows development.
+The default is the local subprocess worker for development only. Production
+mode refuses to evaluate unless Docker isolation is explicitly enabled and the
+Docker CLI/image are available; it never falls back to executing participant
+code on the server host.
 
-Submissions and metadata are immutable records in `data/submissions`; event
-state, jobs, raw results, round scores and published leaderboard snapshots live
-in `data/event.sqlite`. Configure `KAGGRI_PYTHON` to the Python 3.13 environment
-that has `kaggle_environments` installed. The worker runs in a subprocess on
-local Windows; deploy public untrusted submissions with the included Docker
-worker isolation. No Docker installation is performed by the application.
+Submissions and metadata are immutable records under `KAGGRI_DATA_DIR` in
+`submissions/`; event state, jobs, raw results, round scores and published
+leaderboard snapshots live in `event.sqlite`. Configure `KAGGRI_PYTHON` only
+when the evaluator package is installed in a separate interpreter. The worker
+runs in a subprocess on local Windows; deploy public untrusted submissions with
+the included Docker worker isolation. No Docker installation is performed by
+the application. Run one backend instance unless a shared cross-instance worker
+limit is configured outside this application.

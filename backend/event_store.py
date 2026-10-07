@@ -46,15 +46,18 @@ CREATE TABLE IF NOT EXISTS event_state (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     status TEXT NOT NULL,
     current_round INTEGER,
+    event_number INTEGER NOT NULL DEFAULT 1,
     updated_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS evaluation_batches (
-    round_number INTEGER PRIMARY KEY,
+    event_number INTEGER NOT NULL DEFAULT 1,
+    round_number INTEGER NOT NULL,
     batch_id TEXT NOT NULL UNIQUE,
     status TEXT NOT NULL,
     started_at TEXT NOT NULL,
-    finished_at TEXT
+    finished_at TEXT,
+    PRIMARY KEY (event_number, round_number)
 );
 
 CREATE TABLE IF NOT EXISTS participants (
@@ -67,6 +70,7 @@ CREATE TABLE IF NOT EXISTS participants (
 CREATE TABLE IF NOT EXISTS submissions (
     submission_id TEXT PRIMARY KEY,
     participant_id TEXT NOT NULL,
+    event_number INTEGER NOT NULL DEFAULT 1,
     round_number INTEGER NOT NULL,
     version INTEGER NOT NULL,
     file_path TEXT NOT NULL,
@@ -80,6 +84,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_submissions_participant_version
 
 CREATE TABLE IF NOT EXISTS round_active_submissions (
     participant_id TEXT NOT NULL,
+    event_number INTEGER NOT NULL DEFAULT 1,
     round_number INTEGER NOT NULL,
     submission_id TEXT,
     frozen_at TEXT NOT NULL,
@@ -110,6 +115,9 @@ CREATE TABLE IF NOT EXISTS evaluation_results (
     error_message TEXT,
     started_at TEXT,
     finished_at TEXT,
+    job_id TEXT,
+    event_number INTEGER NOT NULL DEFAULT 1,
+    attempt INTEGER,
     FOREIGN KEY (participant_id) REFERENCES participants(participant_id),
     FOREIGN KEY (submission_id) REFERENCES submissions(submission_id)
 );
@@ -120,14 +128,17 @@ CREATE TABLE IF NOT EXISTS evaluation_jobs (
     participant_id TEXT NOT NULL,
     submission_id TEXT NOT NULL,
     round_number INTEGER NOT NULL,
+    event_number INTEGER NOT NULL DEFAULT 1,
     seed INTEGER NOT NULL,
     status TEXT NOT NULL,
     attempts INTEGER NOT NULL DEFAULT 0,
+    claim_token TEXT,
+    started_at TEXT,
     score REAL,
     error_type TEXT,
     error_message TEXT,
     updated_at TEXT NOT NULL,
-    UNIQUE(participant_id, round_number)
+    UNIQUE(event_number, participant_id, round_number)
 );
 
 CREATE TABLE IF NOT EXISTS leaderboard_snapshots (
@@ -146,10 +157,11 @@ CREATE TABLE IF NOT EXISTS leaderboard_snapshots (
 
 class EventStore:
     def __init__(self, db_path: Path, files_dir: Path, compatibility_players_dir: Path | None = None):
-        self.db_path = Path(db_path)
-        self.files_dir = Path(files_dir)
+        self.db_path = Path(db_path).expanduser().resolve()
+        self.files_dir = Path(files_dir).expanduser().resolve()
+        self.data_dir = self.db_path.parent.resolve()
         self.compatibility_players_dir = (
-            Path(compatibility_players_dir) if compatibility_players_dir else None
+            Path(compatibility_players_dir).expanduser().resolve() if compatibility_players_dir else None
         )
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.files_dir.mkdir(parents=True, exist_ok=True)
@@ -157,23 +169,154 @@ class EventStore:
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+        conn = sqlite3.connect(str(self.db_path), timeout=30, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA busy_timeout = 30000")
         return conn
 
     def _init_db(self) -> None:
         with self._lock:
             conn = self._connect()
             try:
+                conn.execute("PRAGMA journal_mode = WAL")
                 conn.executescript(SCHEMA)
+                legacy_submission_scope = "event_number" not in {
+                    row["name"] for row in conn.execute("PRAGMA table_info(submissions)")
+                }
+                legacy_active_scope = "event_number" not in {
+                    row["name"] for row in conn.execute("PRAGMA table_info(round_active_submissions)")
+                }
+                self._ensure_column(conn, "evaluation_jobs", "event_number", "INTEGER NOT NULL DEFAULT 1")
+                self._ensure_column(conn, "evaluation_jobs", "claim_token", "TEXT")
+                self._ensure_column(conn, "evaluation_jobs", "started_at", "TEXT")
+                self._ensure_column(conn, "submissions", "event_number", "INTEGER NOT NULL DEFAULT 1")
+                self._ensure_column(conn, "round_active_submissions", "event_number", "INTEGER NOT NULL DEFAULT 1")
+                self._ensure_column(conn, "evaluation_results", "job_id", "TEXT")
+                self._ensure_column(conn, "evaluation_results", "event_number", "INTEGER NOT NULL DEFAULT 1")
+                self._ensure_column(conn, "evaluation_results", "attempt", "INTEGER")
+                conn.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_evaluation_result_attempt "
+                    "ON evaluation_results(job_id, attempt) WHERE job_id IS NOT NULL AND attempt IS NOT NULL"
+                )
+                columns = {row["name"] for row in conn.execute("PRAGMA table_info(event_state)")}
+                if "event_number" not in columns:
+                    conn.execute("ALTER TABLE event_state ADD COLUMN event_number INTEGER NOT NULL DEFAULT 1")
                 row = conn.execute("SELECT status FROM event_state WHERE id = 1").fetchone()
                 if row is None:
                     conn.execute(
-                        "INSERT INTO event_state (id, status, current_round, updated_at) VALUES (1, ?, NULL, ?)",
+                        "INSERT INTO event_state (id, status, current_round, event_number, updated_at) VALUES (1, ?, NULL, 1, ?)",
                         (REGISTRATION, _now()),
                     )
+                state = conn.execute("SELECT event_number FROM event_state WHERE id = 1").fetchone()
+                if legacy_submission_scope:
+                    conn.execute("UPDATE submissions SET event_number=?", (state["event_number"],))
+                if legacy_active_scope:
+                    conn.execute("UPDATE round_active_submissions SET event_number=?", (state["event_number"],))
+                self._migrate_event_scoped_tables(conn)
+                state = conn.execute("SELECT event_number FROM event_state WHERE id = 1").fetchone()
+                self._cancel_stale_jobs(conn, int(state["event_number"]))
+                conn.execute(
+                    "UPDATE evaluation_batches SET status='CANCELLED', finished_at=? "
+                    "WHERE event_number != ? AND status='STARTED'",
+                    (_now(), int(state["event_number"])),
+                )
                 conn.commit()
+            finally:
+                conn.close()
+
+    @staticmethod
+    def _ensure_column(conn: sqlite3.Connection, table: str, name: str, declaration: str) -> None:
+        columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if name not in columns:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {declaration}")
+
+    @staticmethod
+    def _migrate_event_scoped_tables(conn: sqlite3.Connection) -> None:
+        """Rebuild pre-event-scoped constraints while preserving all persisted rows."""
+        batch_columns = {row["name"]: row for row in conn.execute("PRAGMA table_info(evaluation_batches)")}
+        if "event_number" not in batch_columns:
+            conn.execute("ALTER TABLE evaluation_batches ADD COLUMN event_number INTEGER NOT NULL DEFAULT 1")
+        batch_pk = [
+            row["name"] for row in sorted(
+                (row for row in conn.execute("PRAGMA table_info(evaluation_batches)") if row["pk"]),
+                key=lambda row: row["pk"],
+            )
+        ]
+        if batch_pk != ["event_number", "round_number"]:
+            conn.execute(
+                "CREATE TABLE evaluation_batches_new ("
+                "event_number INTEGER NOT NULL DEFAULT 1, round_number INTEGER NOT NULL, "
+                "batch_id TEXT NOT NULL UNIQUE, status TEXT NOT NULL, started_at TEXT NOT NULL, "
+                "finished_at TEXT, PRIMARY KEY (event_number, round_number))"
+            )
+            conn.execute(
+                "INSERT INTO evaluation_batches_new "
+                "(event_number, round_number, batch_id, status, started_at, finished_at) "
+                "SELECT event_number, round_number, batch_id, status, started_at, finished_at FROM evaluation_batches"
+            )
+            conn.execute("DROP TABLE evaluation_batches")
+            conn.execute("ALTER TABLE evaluation_batches_new RENAME TO evaluation_batches")
+
+        job_columns = {row["name"] for row in conn.execute("PRAGMA table_info(evaluation_jobs)")}
+        required = {
+            "job_id", "batch_id", "participant_id", "submission_id", "round_number", "event_number",
+            "seed", "status", "attempts", "claim_token", "started_at", "score", "error_type",
+            "error_message", "updated_at",
+        }
+        if not required.issubset(job_columns):
+            return
+        old_unique = False
+        for index in conn.execute("PRAGMA index_list(evaluation_jobs)"):
+            if index["unique"]:
+                columns = [row["name"] for row in conn.execute(f"PRAGMA index_info('{index['name']}')")]
+                if columns == ["participant_id", "round_number"]:
+                    old_unique = True
+                    break
+        if old_unique:
+            conn.execute(
+                "CREATE TABLE evaluation_jobs_new ("
+                "job_id TEXT PRIMARY KEY, batch_id TEXT NOT NULL, participant_id TEXT NOT NULL, "
+                "submission_id TEXT NOT NULL, round_number INTEGER NOT NULL, "
+                "event_number INTEGER NOT NULL DEFAULT 1, seed INTEGER NOT NULL, status TEXT NOT NULL, "
+                "attempts INTEGER NOT NULL DEFAULT 0, claim_token TEXT, started_at TEXT, score REAL, "
+                "error_type TEXT, error_message TEXT, updated_at TEXT NOT NULL, "
+                "UNIQUE(event_number, participant_id, round_number))"
+            )
+            columns = (
+                "job_id,batch_id,participant_id,submission_id,round_number,event_number,seed,status,"
+                "attempts,claim_token,started_at,score,error_type,error_message,updated_at"
+            )
+            conn.execute(f"INSERT INTO evaluation_jobs_new ({columns}) SELECT {columns} FROM evaluation_jobs")
+            conn.execute("DROP TABLE evaluation_jobs")
+            conn.execute("ALTER TABLE evaluation_jobs_new RENAME TO evaluation_jobs")
+
+    @staticmethod
+    def _cancel_stale_jobs(conn: sqlite3.Connection, current_event: int) -> int:
+        now = _now()
+        cur = conn.execute(
+            "UPDATE evaluation_jobs SET status='CANCELLED', claim_token=NULL, error_type='STALE_EVENT', "
+            "error_message='Cancelled because the job belongs to a different event.', updated_at=? "
+            "WHERE event_number != ? AND status IN ('QUEUED','RUNNING','RETRYING','SYSTEM_ERROR')",
+            (now, current_event),
+        )
+        return cur.rowcount
+
+    def cancel_stale_jobs(self) -> int:
+        """Mark old-event work terminal before recovery or reset can consider it."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                state = self._require_state(conn)
+                count = self._cancel_stale_jobs(conn, int(state["event_number"]))
+                conn.execute(
+                    "UPDATE evaluation_batches SET status='CANCELLED', finished_at=? "
+                    "WHERE event_number != ? AND status='STARTED'",
+                    (_now(), int(state["event_number"])),
+                )
+                conn.commit()
+                return count
             finally:
                 conn.close()
 
@@ -182,13 +325,14 @@ class EventStore:
             conn = self._connect()
             try:
                 row = conn.execute(
-                    "SELECT status, current_round, updated_at FROM event_state WHERE id = 1"
+                    "SELECT status, current_round, event_number, updated_at FROM event_state WHERE id = 1"
                 ).fetchone()
                 batches = [
                     dict(r)
                     for r in conn.execute(
-                        "SELECT round_number, batch_id, status, started_at, finished_at "
-                        "FROM evaluation_batches ORDER BY round_number"
+                        "SELECT event_number, round_number, batch_id, status, started_at, finished_at "
+                        "FROM evaluation_batches WHERE event_number=? ORDER BY round_number",
+                        (row["event_number"],),
                     ).fetchall()
                 ]
             finally:
@@ -196,6 +340,7 @@ class EventStore:
         return {
             "status": row["status"],
             "current_round": row["current_round"],
+            "event_number": row["event_number"],
             "updated_at": row["updated_at"],
             "total_rounds": TOTAL_ROUNDS,
             "evaluation_batches": batches,
@@ -203,11 +348,33 @@ class EventStore:
 
     def _require_state(self, conn: sqlite3.Connection) -> sqlite3.Row:
         row = conn.execute(
-            "SELECT status, current_round, updated_at FROM event_state WHERE id = 1"
+            "SELECT status, current_round, event_number, updated_at FROM event_state WHERE id = 1"
         ).fetchone()
         if row is None:
             raise EventError("Event state is missing.", 500)
         return row
+
+    @staticmethod
+    def _job_submission_is_active(conn: sqlite3.Connection, job: sqlite3.Row) -> bool:
+        match = conn.execute(
+            "SELECT 1 FROM submissions s JOIN round_active_submissions a "
+            "ON a.participant_id=s.participant_id AND a.round_number=? "
+            "WHERE s.submission_id=? AND s.participant_id=? AND s.round_number<=? "
+            "AND s.event_number=? AND a.event_number=? AND s.status=? AND a.submission_id=?",
+            (
+                job["round_number"], job["submission_id"], job["participant_id"], job["round_number"], job["event_number"],
+                job["event_number"], SUBMISSION_VALID, job["submission_id"],
+            ),
+        ).fetchone()
+        return match is not None
+
+    @staticmethod
+    def _job_batch_is_active(conn: sqlite3.Connection, job: sqlite3.Row) -> bool:
+        return conn.execute(
+            "SELECT 1 FROM evaluation_batches WHERE batch_id=? AND event_number=? "
+            "AND round_number=? AND status='STARTED'",
+            (job["batch_id"], job["event_number"], job["round_number"]),
+        ).fetchone() is not None
 
     def _set_state(self, conn: sqlite3.Connection, status: str, current_round: int | None) -> None:
         if status not in ALL_STATES:
@@ -229,6 +396,7 @@ class EventStore:
         with self._lock:
             conn = self._connect()
             try:
+                conn.execute("BEGIN IMMEDIATE")
                 state = self._require_state(conn)
                 if not registration_allowed(state["status"]):
                     raise EventError(
@@ -289,6 +457,7 @@ class EventStore:
         with self._lock:
             conn = self._connect()
             try:
+                conn.execute("BEGIN IMMEDIATE")
                 state = self._require_state(conn)
                 status = state["status"]
 
@@ -336,6 +505,7 @@ class EventStore:
         with self._lock:
             conn = self._connect()
             try:
+                conn.execute("BEGIN IMMEDIATE")
                 state = self._require_state(conn)
                 if not is_submission_open(state["status"]):
                     raise EventError(
@@ -357,6 +527,7 @@ class EventStore:
         with self._lock:
             conn = self._connect()
             try:
+                conn.execute("BEGIN IMMEDIATE")
                 state = self._require_state(conn)
                 current = parse_round_from_state(state["status"])
                 if current is None:
@@ -387,8 +558,8 @@ class EventStore:
                     )
 
                 existing = conn.execute(
-                    "SELECT batch_id, status FROM evaluation_batches WHERE round_number = ?",
-                    (target,),
+                    "SELECT batch_id, status FROM evaluation_batches WHERE round_number = ? AND event_number = ?",
+                    (target, state["event_number"]),
                 ).fetchone()
                 if existing:
                     raise EventError(
@@ -398,21 +569,23 @@ class EventStore:
 
                 batch_id = _new_id("evalbatch")
                 conn.execute(
-                    "INSERT INTO evaluation_batches (round_number, batch_id, status, started_at, finished_at) "
-                    "VALUES (?, ?, ?, ?, NULL)",
-                    (target, batch_id, "STARTED", _now()),
+                    "INSERT INTO evaluation_batches (event_number, round_number, batch_id, status, started_at, finished_at) "
+                    "VALUES (?, ?, ?, ?, ?, NULL)",
+                    (state["event_number"], target, batch_id, "STARTED", _now()),
                 )
                 rows = conn.execute(
                     "SELECT a.participant_id, a.submission_id FROM round_active_submissions a "
-                    "WHERE a.round_number = ? AND a.submission_id IS NOT NULL",
-                    (target,),
+                    "JOIN submissions s ON s.submission_id=a.submission_id "
+                    "WHERE a.round_number = ? AND a.event_number=? AND s.event_number=? "
+                    "AND a.submission_id IS NOT NULL",
+                    (target, state["event_number"], state["event_number"]),
                 ).fetchall()
                 for row in rows:
                     conn.execute(
                         "INSERT INTO evaluation_jobs "
-                        "(job_id, batch_id, participant_id, submission_id, round_number, seed, status, updated_at) "
-                        "VALUES (?, ?, ?, ?, ?, ?, 'QUEUED', ?)",
-                        (_new_id("job"), batch_id, row["participant_id"], row["submission_id"], target, OFFICIAL_SEED, _now()),
+                        "(job_id, batch_id, participant_id, submission_id, round_number, event_number, seed, status, updated_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, 'QUEUED', ?)",
+                        (_new_id("job"), batch_id, row["participant_id"], row["submission_id"], target, state["event_number"], OFFICIAL_SEED, _now()),
                     )
                 self._set_state(conn, round_state(target, "EVALUATING"), target)
                 conn.commit()
@@ -424,6 +597,7 @@ class EventStore:
         with self._lock:
             conn = self._connect()
             try:
+                conn.execute("BEGIN IMMEDIATE")
                 state = self._require_state(conn)
                 current = parse_round_from_state(state["status"])
                 if current is None or state["status"] != round_state(current, "PROCESSING_RESULTS"):
@@ -438,14 +612,16 @@ class EventStore:
                         409,
                     )
                 pending = conn.execute(
-                    "SELECT COUNT(*) FROM evaluation_jobs WHERE round_number = ? "
-                    "AND status IN ('QUEUED', 'RUNNING', 'RETRYING', 'SYSTEM_ERROR')", (target,)
+                    "SELECT COUNT(*) FROM evaluation_jobs WHERE round_number = ? AND event_number = ? "
+                    "AND status IN ('QUEUED', 'RUNNING', 'RETRYING', 'SYSTEM_ERROR')",
+                    (target, state["event_number"]),
                 ).fetchone()[0]
                 if pending:
                     raise EventError("Evaluation jobs are still pending.", 409)
                 conn.execute(
-                    "UPDATE evaluation_batches SET status = ?, finished_at = ? WHERE round_number = ?",
-                    ("COMPLETED", _now(), target),
+                    "UPDATE evaluation_batches SET status = ?, finished_at = ? "
+                    "WHERE round_number = ? AND event_number = ?",
+                    ("COMPLETED", _now(), target, state["event_number"]),
                 )
                 people = conn.execute("SELECT participant_id FROM participants").fetchall()
                 totals = []
@@ -473,6 +649,7 @@ class EventStore:
         with self._lock:
             conn = self._connect()
             try:
+                conn.execute("BEGIN IMMEDIATE")
                 state = self._require_state(conn)
                 if state["status"] != round_state(3, "COMPLETE"):
                     raise EventError(
@@ -483,6 +660,80 @@ class EventStore:
                 conn.commit()
             finally:
                 conn.close()
+        return self.get_state()
+
+    def get_admin_overview(self) -> dict:
+        with self._lock:
+            conn = self._connect()
+            try:
+                participants = conn.execute("SELECT COUNT(*) FROM participants").fetchone()[0]
+                submissions = conn.execute("SELECT COUNT(*) FROM submissions").fetchone()[0]
+                jobs = {row["status"]: row["count"] for row in conn.execute(
+                    "SELECT status, COUNT(*) AS count FROM evaluation_jobs "
+                    "WHERE event_number=? GROUP BY status",
+                    (self._require_state(conn)["event_number"],),
+                ).fetchall()}
+                rounds = [dict(row) for row in conn.execute(
+                    "SELECT through_round, COUNT(*) AS participants, MAX(published_at) AS published_at "
+                    "FROM leaderboard_snapshots GROUP BY through_round ORDER BY through_round"
+                ).fetchall()]
+            finally:
+                conn.close()
+        return {"event": self.get_state(), "participants": participants, "submissions": submissions,
+                "evaluation_jobs": jobs, "rounds": rounds}
+
+    def reset_event(self) -> dict:
+        """Clear the active run without deleting the database or unrelated files."""
+        files: list[Path] = []
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                state = self._require_state(conn)
+                self._cancel_stale_jobs(conn, int(state["event_number"]))
+                registered = conn.execute("SELECT COUNT(*) FROM participants").fetchone()[0]
+                if state["status"] == REGISTRATION and registered == 0:
+                    raise EventError("A new empty event is already active; refusing to increment its event number again.", 409)
+                pending = conn.execute(
+                    "SELECT COUNT(*) FROM evaluation_jobs WHERE event_number=? "
+                    "AND status IN ('QUEUED','RUNNING','RETRYING')",
+                    (state["event_number"],),
+                ).fetchone()[0]
+                if pending:
+                    raise EventError("Evaluation is currently queued or running. Wait for completion before resetting.", 409)
+                files = [Path(row[0]) for row in conn.execute("SELECT file_path FROM submissions").fetchall()]
+                root = self.files_dir.resolve()
+                for path in files:
+                    try:
+                        path.resolve().relative_to(root)
+                    except ValueError as exc:
+                        raise EventError("Reset stopped because a submission path is outside the submissions directory.", 409) from exc
+                conn.execute("DELETE FROM evaluation_results")
+                conn.execute("DELETE FROM evaluation_jobs")
+                conn.execute("DELETE FROM round_active_submissions")
+                conn.execute("DELETE FROM round_scores")
+                conn.execute("DELETE FROM leaderboard_snapshots")
+                conn.execute("DELETE FROM evaluation_batches")
+                conn.execute("DELETE FROM submissions")
+                conn.execute("DELETE FROM participants")
+                conn.execute(
+                    "UPDATE event_state SET status=?, current_round=NULL, event_number=event_number+1, updated_at=? WHERE id=1",
+                    (REGISTRATION, _now()),
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                conn.close()
+        for path in files:
+            path.unlink(missing_ok=True)
+        for directory in self.files_dir.iterdir():
+            if directory.is_dir():
+                try:
+                    directory.rmdir()
+                except OSError:
+                    pass
         return self.get_state()
 
     def begin_result_processing(self, round_number: int | None = None) -> dict:
@@ -497,14 +748,16 @@ class EventStore:
                 if target != current:
                     raise EventError("Requested round does not match the active round.", 409)
                 pending = conn.execute(
-                    "SELECT COUNT(*) FROM evaluation_jobs WHERE round_number = ? "
-                    "AND status IN ('QUEUED', 'RUNNING', 'RETRYING', 'SYSTEM_ERROR')", (target,)
+                    "SELECT COUNT(*) FROM evaluation_jobs WHERE round_number = ? AND event_number = ? "
+                    "AND status IN ('QUEUED', 'RUNNING', 'RETRYING', 'SYSTEM_ERROR')",
+                    (target, state["event_number"]),
                 ).fetchone()[0]
                 if pending:
                     raise EventError(f"{pending} evaluation jobs are still pending.", 409)
                 jobs = conn.execute(
-                    "SELECT participant_id, score, status, error_type FROM evaluation_jobs WHERE round_number = ?",
-                    (target,),
+                    "SELECT participant_id, score, status, error_type FROM evaluation_jobs "
+                    "WHERE round_number = ? AND event_number = ?",
+                    (target, state["event_number"]),
                 ).fetchall()
                 for job in jobs:
                     score = float(job["score"] or 0)
@@ -520,15 +773,17 @@ class EventStore:
                 conn.close()
         return self.get_state()
 
-    def get_evaluation_jobs(self, round_number: int | None = None) -> list[dict]:
+    def get_evaluation_jobs(self, round_number: int | None = None, event_number: int | None = None) -> list[dict]:
         with self._lock:
             conn = self._connect()
             try:
-                sql = "SELECT * FROM evaluation_jobs"
-                args = ()
+                if event_number is None:
+                    event_number = int(self._require_state(conn)["event_number"])
+                sql = "SELECT * FROM evaluation_jobs WHERE event_number = ?"
+                args = (event_number,)
                 if round_number is not None:
-                    sql += " WHERE round_number = ?"
-                    args = (round_number,)
+                    sql += " AND round_number = ?"
+                    args += (round_number,)
                 rows = conn.execute(sql + " ORDER BY round_number, participant_id", args).fetchall()
             finally:
                 conn.close()
@@ -543,27 +798,137 @@ class EventStore:
                 if row is None or row["status"] not in ("QUEUED", "RETRYING"):
                     conn.rollback()
                     return None
-                conn.execute("UPDATE evaluation_jobs SET status='RUNNING', attempts=attempts+1, updated_at=? WHERE job_id=?", (_now(), job_id))
+                state = self._require_state(conn)
+                if (
+                    row["event_number"] != state["event_number"]
+                    or state["status"] != round_state(row["round_number"], "EVALUATING")
+                    or state["current_round"] != row["round_number"]
+                    or not self._job_submission_is_active(conn, row)
+                    or not self._job_batch_is_active(conn, row)
+                ):
+                    conn.rollback()
+                    return None
+                token = _new_id("lease")
+                started_at = _now()
+                conn.execute(
+                    "UPDATE evaluation_jobs SET status='RUNNING', attempts=attempts+1, claim_token=?, started_at=?, updated_at=? "
+                    "WHERE job_id=? AND status IN ('QUEUED','RETRYING')",
+                    (token, started_at, started_at, job_id),
+                )
                 conn.commit()
                 return dict(conn.execute("SELECT * FROM evaluation_jobs WHERE job_id=?", (job_id,)).fetchone())
             finally:
                 conn.close()
 
-    def finish_job(self, job_id: str, status: str, score: float | None = None, error_type: str | None = None, error_message: str | None = None) -> None:
+    def claim_next_job(self, round_number: int) -> dict | None:
+        """Atomically claim one persisted job; workers never enqueue the whole batch in RAM."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                state = self._require_state(conn)
+                if state["status"] != round_state(round_number, "EVALUATING"):
+                    conn.rollback()
+                    return None
+                row = conn.execute(
+                    "SELECT job_id FROM evaluation_jobs WHERE round_number=? AND event_number=? "
+                    "AND status IN ('QUEUED','RETRYING') "
+                    "AND EXISTS (SELECT 1 FROM submissions s JOIN round_active_submissions a "
+                    "ON a.participant_id=s.participant_id AND a.round_number=evaluation_jobs.round_number "
+                    "WHERE s.submission_id=evaluation_jobs.submission_id "
+                    "AND s.participant_id=evaluation_jobs.participant_id "
+                    "AND s.round_number<=evaluation_jobs.round_number "
+                    "AND s.event_number=evaluation_jobs.event_number "
+                    "AND a.event_number=evaluation_jobs.event_number "
+                    "AND a.submission_id=evaluation_jobs.submission_id) "
+                    "AND EXISTS (SELECT 1 FROM evaluation_batches b WHERE b.batch_id=evaluation_jobs.batch_id "
+                    "AND b.event_number=evaluation_jobs.event_number AND b.round_number=evaluation_jobs.round_number "
+                    "AND b.status='STARTED') "
+                    "ORDER BY participant_id LIMIT 1",
+                    (round_number, state["event_number"]),
+                ).fetchone()
+                if row is None:
+                    conn.rollback()
+                    return None
+                job_id = row["job_id"]
+                token = _new_id("lease")
+                started_at = _now()
+                conn.execute(
+                    "UPDATE evaluation_jobs SET status='RUNNING', attempts=attempts+1, claim_token=?, started_at=?, updated_at=? "
+                    "WHERE job_id=? AND status IN ('QUEUED','RETRYING')",
+                    (token, started_at, started_at, job_id),
+                )
+                conn.commit()
+                return dict(conn.execute("SELECT * FROM evaluation_jobs WHERE job_id=?", (job_id,)).fetchone())
+            finally:
+                conn.close()
+
+    def recover_running_jobs(self, max_retries: int) -> int:
+        """Fence callbacks from the old process and requeue only within the retry budget."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                state = self._require_state(conn)
+                self._cancel_stale_jobs(conn, int(state["event_number"]))
+                rows = conn.execute(
+                    "SELECT job_id, attempts FROM evaluation_jobs WHERE event_number=? AND status='RUNNING'",
+                    (state["event_number"],),
+                ).fetchall()
+                for row in rows:
+                    status = "RETRYING" if row["attempts"] <= max_retries else "SYSTEM_ERROR"
+                    conn.execute(
+                        "UPDATE evaluation_jobs SET status=?, claim_token=NULL, error_type='SYSTEM_ERROR', "
+                        "error_message='Worker process restarted.', updated_at=? WHERE job_id=? AND status='RUNNING'",
+                        (status, _now(), row["job_id"]),
+                    )
+                conn.commit()
+                return len(rows)
+            finally:
+                conn.close()
+
+    def finish_job(self, job_id: str, status: str, score: float | None = None, error_type: str | None = None, error_message: str | None = None, claim_token: str | None = None) -> bool:
         if status not in {"SUCCESS", "PLAYER_ERROR", "TIMEOUT", "SYSTEM_ERROR", "RETRYING"}:
             raise EventError("Invalid evaluation job status.", 400)
         with self._lock:
             conn = self._connect()
             try:
-                conn.execute("UPDATE evaluation_jobs SET status=?, score=?, error_type=?, error_message=?, updated_at=? WHERE job_id=?", (status, score, error_type, (error_message or "")[:4000] or None, _now(), job_id))
+                conn.execute("BEGIN IMMEDIATE")
                 row = conn.execute("SELECT * FROM evaluation_jobs WHERE job_id=?", (job_id,)).fetchone()
-                if row is not None and status not in ("RETRYING", "RUNNING"):
+                if row is None:
+                    conn.rollback()
+                    return False
+                if row["status"] == "RUNNING" and (not claim_token or row["claim_token"] != claim_token):
+                    conn.rollback()
+                    return False
+                if claim_token and row["claim_token"] != claim_token:
+                    conn.rollback()
+                    return False
+                state = self._require_state(conn)
+                if (
+                    row["event_number"] != state["event_number"]
+                    or state["status"] != round_state(row["round_number"], "EVALUATING")
+                    or state["current_round"] != row["round_number"]
+                    or not self._job_submission_is_active(conn, row)
+                    or not self._job_batch_is_active(conn, row)
+                ):
+                    conn.rollback()
+                    return False
+                now = _now()
+                conn.execute(
+                    "UPDATE evaluation_jobs SET status=?, score=?, error_type=?, error_message=?, claim_token=NULL, updated_at=? WHERE job_id=?",
+                    (status, score, error_type, (error_message or "")[:4000] or None, now, job_id),
+                )
+                row = conn.execute("SELECT * FROM evaluation_jobs WHERE job_id=?", (job_id,)).fetchone()
+                if status not in ("RETRYING", "RUNNING"):
                     conn.execute(
-                        "INSERT INTO evaluation_results (evaluation_id, participant_id, submission_id, round_number, seed, score, status, error_type, error_message, started_at, finished_at) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        (_new_id("eval"), row["participant_id"], row["submission_id"], row["round_number"], row["seed"], score, status, error_type, (error_message or "")[:4000] or None, row["updated_at"], _now()),
+                        "INSERT OR IGNORE INTO evaluation_results "
+                        "(evaluation_id, participant_id, submission_id, round_number, seed, score, status, error_type, error_message, started_at, finished_at, job_id, event_number, attempt) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (_new_id("eval"), row["participant_id"], row["submission_id"], row["round_number"], row["seed"], score, status, error_type, (error_message or "")[:4000] or None, row["started_at"], now, job_id, row["event_number"], row["attempts"]),
                     )
                 conn.commit()
+                return True
             finally:
                 conn.close()
 
@@ -578,14 +943,18 @@ class EventStore:
             raise EventError("Submission not found.", 404)
         return Path(row["file_path"])
 
-    def retry_system_errors(self, round_number: int) -> int:
+    def retry_system_errors(self, round_number: int, max_retries: int = 2) -> int:
         with self._lock:
             conn = self._connect()
             try:
                 state = self._require_state(conn)
                 if state["status"] != round_state(round_number, "EVALUATING"):
                     raise EventError("System errors can be retried only while that round is evaluating.", 409)
-                cur = conn.execute("UPDATE evaluation_jobs SET status='RETRYING', updated_at=? WHERE round_number=? AND status='SYSTEM_ERROR'", (_now(), round_number))
+                cur = conn.execute(
+                    "UPDATE evaluation_jobs SET status='RETRYING', updated_at=? "
+                    "WHERE round_number=? AND event_number=? AND status='SYSTEM_ERROR' AND attempts < ?",
+                    (_now(), round_number, state["event_number"], max_retries + 1),
+                )
                 conn.commit()
                 return cur.rowcount
             finally:
@@ -595,6 +964,7 @@ class EventStore:
         with self._lock:
             conn = self._connect()
             try:
+                conn.execute("BEGIN IMMEDIATE")
                 state = self._require_state(conn)
                 if not is_submission_open(state["status"]):
                     raise EventError(
@@ -623,19 +993,33 @@ class EventStore:
                 ).fetchone()
                 version = int(version_row["max_version"]) + 1
                 submission_id = _new_id("sub")
-                dest_dir = self.files_dir / participant_id
+                root = self.files_dir.resolve()
+                dest_dir = (root / participant_id).resolve()
+                try:
+                    dest_dir.relative_to(root)
+                except ValueError as exc:
+                    raise EventError("Participant storage path is invalid.", 400) from exc
                 dest_dir.mkdir(parents=True, exist_ok=True)
                 dest_path = dest_dir / f"{submission_id}.py"
-                dest_path.write_text(source_text, encoding="utf-8")
+                temp_path = dest_dir / f".{submission_id}.tmp"
+                try:
+                    with temp_path.open("x", encoding="utf-8", newline="") as agent_file:
+                        agent_file.write(source_text)
+                        agent_file.flush()
+                    temp_path.replace(dest_path)
+                except Exception:
+                    temp_path.unlink(missing_ok=True)
+                    raise
 
                 created_at = _now()
                 conn.execute(
                     "INSERT INTO submissions "
-                    "(submission_id, participant_id, round_number, version, file_path, created_at, status) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    "(submission_id, participant_id, event_number, round_number, version, file_path, created_at, status) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         submission_id,
                         participant_id,
+                        state["event_number"],
                         round_number,
                         version,
                         str(dest_path),
@@ -680,17 +1064,19 @@ class EventStore:
         with self._lock:
             conn = self._connect()
             try:
-                return self._resolve_active(conn, participant_id, round_number)
+                event_number = int(self._require_state(conn)["event_number"])
+                return self._resolve_active(conn, participant_id, round_number, event_number)
             finally:
                 conn.close()
 
-    def _resolve_active(self, conn: sqlite3.Connection, participant_id: str, round_number: int) -> dict | None:
+    def _resolve_active(self, conn: sqlite3.Connection, participant_id: str, round_number: int, event_number: int) -> dict | None:
         frozen = conn.execute(
             "SELECT s.submission_id, s.participant_id, s.round_number, s.version, s.file_path, s.created_at, s.status "
             "FROM round_active_submissions a "
             "LEFT JOIN submissions s ON s.submission_id = a.submission_id "
-            "WHERE a.participant_id = ? AND a.round_number = ?",
-            (participant_id, round_number),
+            "WHERE a.participant_id = ? AND a.round_number = ? AND a.event_number=? "
+            "AND (s.event_number=? OR s.submission_id IS NULL)",
+            (participant_id, round_number, event_number, event_number),
         ).fetchone()
         if frozen is not None:
             if frozen["submission_id"] is None:
@@ -700,30 +1086,31 @@ class EventStore:
         row = conn.execute(
             "SELECT submission_id, participant_id, round_number, version, file_path, created_at, status "
             "FROM submissions "
-            "WHERE participant_id = ? AND round_number <= ? AND status = ? "
+            "WHERE participant_id = ? AND event_number=? AND round_number <= ? AND status = ? "
             "ORDER BY round_number DESC, version DESC LIMIT 1",
-            (participant_id, round_number, SUBMISSION_VALID),
+            (participant_id, event_number, round_number, SUBMISSION_VALID),
         ).fetchone()
         return dict(row) if row else None
 
     def _freeze_round_active(self, conn: sqlite3.Connection, round_number: int) -> None:
         frozen_at = _now()
+        event_number = int(self._require_state(conn)["event_number"])
         participants = conn.execute("SELECT participant_id FROM participants").fetchall()
         for p in participants:
             pid = p["participant_id"]
             active = conn.execute(
                 "SELECT submission_id FROM submissions "
-                "WHERE participant_id = ? AND round_number <= ? AND status = ? "
+                "WHERE participant_id = ? AND event_number=? AND round_number <= ? AND status = ? "
                 "ORDER BY round_number DESC, version DESC LIMIT 1",
-                (pid, round_number, SUBMISSION_VALID),
+                (pid, event_number, round_number, SUBMISSION_VALID),
             ).fetchone()
             submission_id = active["submission_id"] if active else None
             conn.execute(
-                "INSERT INTO round_active_submissions (participant_id, round_number, submission_id, frozen_at) "
-                "VALUES (?, ?, ?, ?) "
+                "INSERT INTO round_active_submissions (participant_id, event_number, round_number, submission_id, frozen_at) "
+                "VALUES (?, ?, ?, ?, ?) "
                 "ON CONFLICT(participant_id, round_number) DO UPDATE SET "
-                "submission_id = excluded.submission_id, frozen_at = excluded.frozen_at",
-                (pid, round_number, submission_id, frozen_at),
+                "event_number = excluded.event_number, submission_id = excluded.submission_id, frozen_at = excluded.frozen_at",
+                (pid, event_number, round_number, submission_id, frozen_at),
             )
 
     def _ensure_missing_scores(self, conn: sqlite3.Connection, round_number: int) -> None:
@@ -801,6 +1188,7 @@ class EventStore:
         error_message: str | None = None,
         started_at: str | None = None,
         finished_at: str | None = None,
+        event_number: int | None = None,
     ) -> dict:
         """Persist a raw evaluation result. Does not execute a match."""
         if round_number < 1 or round_number > TOTAL_ROUNDS:
@@ -814,11 +1202,27 @@ class EventStore:
         with self._lock:
             conn = self._connect()
             try:
+                conn.execute("BEGIN IMMEDIATE")
+                state = self._require_state(conn)
+                current_event = int(state["event_number"])
+                if event_number is not None and event_number != current_event:
+                    raise EventError("Evaluation result belongs to a stale event.", 409)
+                if submission_id is not None:
+                    relation = conn.execute(
+                        "SELECT 1 FROM submissions s JOIN round_active_submissions a "
+                        "ON a.participant_id=s.participant_id AND a.round_number=? "
+                        "WHERE s.submission_id=? AND s.participant_id=? AND s.round_number<=? "
+                        "AND s.event_number=? AND a.event_number=? "
+                        "AND a.submission_id=?",
+                        (round_number, submission_id, participant_id, round_number, current_event, current_event, submission_id),
+                    ).fetchone()
+                    if relation is None:
+                        raise EventError("Evaluation result submission does not belong to this participant and round.", 409)
                 conn.execute(
                     "INSERT INTO evaluation_results ("
                     "evaluation_id, participant_id, submission_id, round_number, seed, score, "
-                    "status, error_type, error_message, started_at, finished_at"
-                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "status, error_type, error_message, started_at, finished_at, event_number"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         evaluation_id,
                         participant_id,
@@ -831,6 +1235,7 @@ class EventStore:
                         error_message,
                         started_at,
                         finished_at,
+                        current_event,
                     ),
                 )
                 conn.commit()
