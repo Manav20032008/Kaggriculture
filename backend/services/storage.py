@@ -141,6 +141,10 @@ def _iso(value: datetime | None) -> str | None:
     if value.tzinfo is None: value = value.replace(tzinfo=timezone.utc)
     return value.isoformat(timespec="seconds")
 
+def _as_utc(value: datetime) -> datetime:
+    """SQLite returns naive datetimes for timezone-aware columns; treat them as UTC."""
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
 class PlatformStore:
     def __init__(self, source: str | Path | None = None):
         self.database_url = _database_url(source)
@@ -355,7 +359,7 @@ class PlatformStore:
     def admin_metrics(self) -> dict:
         with self.session() as db:
             counts={s:int(db.scalar(select(func.count()).select_from(SimulationJob).where(SimulationJob.status==s)) or 0) for s in ("queued","running","completed","failed","cancelled")};queues={q:int(db.scalar(select(func.count()).select_from(SimulationJob).where(SimulationJob.queue_name==q,SimulationJob.status=="queued")) or 0) for q in ("sandbox","official","tournament")}
-            completed=db.scalars(select(SimulationJob).where(SimulationJob.status=="completed",SimulationJob.started_at.is_not(None),SimulationJob.completed_at.is_not(None)).order_by(SimulationJob.completed_at.desc()).limit(100)).all(); runtimes=[(j.completed_at-j.started_at).total_seconds() for j in completed]
+            completed=db.scalars(select(SimulationJob).where(SimulationJob.status=="completed",SimulationJob.started_at.is_not(None),SimulationJob.completed_at.is_not(None)).order_by(SimulationJob.completed_at.desc()).limit(100)).all(); runtimes=[((_as_utc(j.completed_at))-(_as_utc(j.started_at))).total_seconds() for j in completed]
             now=utc_now();queued=db.scalars(select(SimulationJob).where(SimulationJob.status=="queued")).all();waits=[max(0,(now-(j.created_at.replace(tzinfo=timezone.utc) if j.created_at.tzinfo is None else j.created_at)).total_seconds()) for j in queued]
             failures=db.execute(select(SimulationJob.id,SimulationJob.type,SimulationJob.error,SimulationJob.completed_at).where(SimulationJob.status=="failed").order_by(SimulationJob.completed_at.desc()).limit(10)).all()
             sorted_runtime=sorted(runtimes);p95_runtime=sorted_runtime[min(len(sorted_runtime)-1,int(len(sorted_runtime)*.95))] if sorted_runtime else None
@@ -381,7 +385,7 @@ class PlatformStore:
         with self.session() as db:
             rows=db.scalars(select(WorkerRecord)).all();items=[]
             for row in rows:
-                status=row.status if row.last_heartbeat>=cutoff else "offline"
+                status=row.status if _as_utc(row.last_heartbeat)>=cutoff else "offline"
                 items.append({"id":row.id,"status":status,"lastHeartbeat":_iso(row.last_heartbeat),"currentJobId":row.current_job_id if status=="busy" else None,"jobsCompleted":row.jobs_completed,"jobsFailed":row.jobs_failed,"startedAt":_iso(row.started_at)})
             return {"total":len(items),"busy":sum(w["status"]=="busy" for w in items),"idle":sum(w["status"]=="idle" for w in items),"offline":sum(w["status"]=="offline" for w in items),"items":items}
 

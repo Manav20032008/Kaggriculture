@@ -133,6 +133,7 @@ def _queue_status():
             job = store.get_job(waiting[0])
             if job and job.get("createdAt"):
                 created = datetime.fromisoformat(job["createdAt"])
+                if created.tzinfo is None: created = created.replace(tzinfo=timezone.utc)
                 queues[name]["oldestWaitSeconds"] = max(0, int((datetime.now(timezone.utc) - created).total_seconds()))
     for job in store.list_admin_jobs(status="running", limit=1000):
         queues.setdefault(job["queue"], {"queued": 0, "running": 0, "oldestWaitSeconds": None, "paused": False})["running"] += 1
@@ -144,6 +145,9 @@ def _durations(job: dict) -> dict:
         created=datetime.fromisoformat(job["createdAt"])
         started=datetime.fromisoformat(job["startedAt"]) if job.get("startedAt") else None
         completed=datetime.fromisoformat(job["completedAt"]) if job.get("completedAt") else None
+        created=created.replace(tzinfo=timezone.utc) if created.tzinfo is None else created.astimezone(timezone.utc)
+        started=(started.replace(tzinfo=timezone.utc) if started and started.tzinfo is None else started.astimezone(timezone.utc) if started else None)
+        completed=(completed.replace(tzinfo=timezone.utc) if completed and completed.tzinfo is None else completed.astimezone(timezone.utc) if completed else None)
         now=datetime.now(timezone.utc)
         return {**job,"queueWaitSeconds":max(0,round(((started or now)-created).total_seconds(),2)),
                 "runtimeSeconds":round(((completed or now)-started).total_seconds(),2) if started else None}
