@@ -15,7 +15,7 @@ for path in (DATA_DIR, SUBMISSIONS_DIR, DATA_DIR / "tmp"):
 
 
 def is_production() -> bool:
-    return os.environ.get("KAGGRI_ENV", "").strip().lower() == "production" or os.environ.get("RENDER", "").strip().lower() == "true"
+    return os.environ.get("KAGGRI_ENV", "").strip().lower() == "production"
 
 
 def configured_cors_origins() -> list[str]:
